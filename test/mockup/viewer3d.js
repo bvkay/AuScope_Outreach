@@ -329,8 +329,9 @@
     var rescale = function () { if (applyScale()) { updateSolid(); updateSurfs(); setVE(ve); sync(); } };
 
     // take a field's own range and defaults
+    var fieldOver = null;       // set by a saved view; cleared when the visitor picks a field
     var useField = function (keepLimits) {
-      var f = sc.fields[fi], m = cache[stemOf()].meta;
+      var f = Object.assign({}, sc.fields[fi], fieldOver || {}), m = cache[stemOf()].meta;
       lo = m.scale.lo; hi = m.scale.hi; isLog = m.log !== false; unit = f.unit;
       $('scale-title').textContent = f.label + (unit ? ' (' + unit + ')' : '');
       [].forEach.call(document.querySelectorAll('.unit'), function (e) { e.textContent = unit || ''; });
@@ -352,7 +353,7 @@
     // fields
     $('field').innerHTML = sc.fields.map(function (f, i) { return '<option value="' + i + '">' + f.label + '</option>'; }).join('');
     show('field-row', sc.fields.length > 1);
-    $('field').addEventListener('change', function () { fi = +this.value; swap(false); });
+    $('field').addEventListener('change', function () { fi = +this.value; fieldOver = null; swap(false); });
 
     // time
     var timer = null;
@@ -368,7 +369,7 @@
       };
     }
     show('time-row', !!sc.times);
-    document.querySelector('.cp-data').hidden = sc.fields.length <= 1 && !sc.times;
+    document.querySelector('.cp-data').hidden = sc.fields.length <= 1 && !sc.times && !(sc.views && sc.views.length);
 
     // what a 2D section does not need
     ['tab-slices', 'tab-volume'].forEach(function (id) { show(id, !is2d); });
@@ -376,9 +377,7 @@
     if (is2d) [].forEach.call($('views').children, function (b) { b.hidden = b.dataset.v !== 'south'; });
     if (!is2d) {
       $('k').max = nz - 1; $('i').max = nx - 1; $('j').max = ny - 1;
-      var d = sc.slices || {}; $('k').value = d.k != null ? d.k : Math.round(nz * 0.85); $('i').value = d.i != null ? d.i : Math.round(nx / 2); $('j').value = d.j != null ? d.j : Math.round(ny / 2);
       $('i-name').textContent = 'Section across ' + short(axisNames[0]); $('j-name').textContent = 'Section across ' + short(axisNames[1]);
-      $('on-i').checked = !!d.showI; $('on-j').checked = d.showJ !== false; $('on-k').checked = d.showK !== false;
     }
 
     ['k', 'i', 'j', 'on-k', 'on-i', 'on-j', 'op-k', 'op-i', 'op-j', 'on-solid', 's-op', 'surf-op', 'on-sites', 'on-axes', 'on-outline'].forEach(function (id) { $(id).addEventListener('input', sync); });
@@ -386,7 +385,7 @@
     ['s-min-on', 's-max-on', 's-min', 's-max'].forEach(function (id) { $(id).addEventListener('change', function () { updateSolid(); sync(); }); });
     $('surf').addEventListener('change', function () { updateSurfs(); setVE(ve); sync(); });
     $('ve').addEventListener('change', function () { setVE(+this.value); if (current) view(current); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); } });
-    $('vreset').onclick = function () { useField(false); rescale(); };
+    $('vreset').onclick = function () { fieldOver = null; useField(false); rescale(); };
     $('compass').addEventListener('change', function () { setCompass(); win.render(); });
 
     // ── extent: cut in from any side, in kilometres ──
@@ -436,11 +435,67 @@
     });
     window.addEventListener('resize', function () { grw.resize(); win.render(); });
 
+    // ── the model's own starting view. Everything a visitor can change has a default in the
+    //    scene file ("defaults", plus each field's own scale, solid and surfaces), so a model opens
+    //    looking the way its author chose, and "Model defaults" brings that back. ──
+    //    A model can also carry several named views ("views" in the scene file), each a full set of
+    //    the same settings, so its author can point at different things in the same model.
+    var D = sc.defaults || {};
+    var num = function (v, fallback) { return v != null ? v : fallback; };
+    var VIEWSETS = [{ name: 'Opening view', defaults: sc.defaults || {}, field: null }].concat(sc.views || []);
+    $('preset').innerHTML = VIEWSETS.map(function (p, i) { return '<option value="' + i + '">' + p.name + '</option>'; }).join('');
+    show('preset-row', VIEWSETS.length > 1);
+    $('preset').addEventListener('change', function () { applyDefaults(); });
+    var applyDefaults = async function () {
+      var chosen = VIEWSETS[+$('preset').value] || VIEWSETS[0];
+      D = chosen.defaults || {}; fieldOver = chosen.field || null;
+      var sl = D.slices || {}, sh = D.show || {}, cut = D.cut || {};
+      fi = D.field || 0; $('field').value = fi;
+      if (sc.times) { ti = num(D.time, sc.times.length - 1); $('t').value = ti; $('t-o').textContent = sc.times[ti].label; }
+      $('ve').value = String(D.ve || 1);
+      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false;
+      $('compass').value = D.marker || 'cube';
+      [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']].forEach(function (c) { $(c[0]).value = cut[c[1]] || 0; });
+      if (!is2d) {
+        $('k').value = sl.depth_km != null ? nz - 1 - Math.round(sl.depth_km / sp[2]) : Math.round(nz * 0.85);
+        $('i').value = sl.x_km != null ? Math.round(sl.x_km / sp[0]) : Math.round(nx / 2);
+        $('j').value = sl.y_km != null ? Math.round(sl.y_km / sp[1]) : Math.round(ny / 2);
+        $('on-k').checked = sl.showDepth !== false; $('on-i').checked = !!sl.showX; $('on-j').checked = sl.showY !== false;
+        $('op-k').value = num(sl.opacityDepth, 100); $('op-i').value = num(sl.opacityX, 100); $('op-j').value = num(sl.opacityY, 100);
+        $('on-solid').checked = D.showSolid !== false; $('s-op').value = num(D.solidOpacity, 100); $('surf-op').value = num(D.surfaceOpacity, 50);
+      }
+      await swap(false);                    // the field's own scale, solid and surfaces
+      setVE(+$('ve').value); setCompass(); applyCut();
+      view(!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique'));
+    };
+    $('to-defaults').onclick = function () { $('preset').value = 0; applyDefaults(); };
+
+    // For whoever sets a model up: the current settings, in the form the scene file takes.
+    $('copy-settings').onclick = function () {
+      var b = this, f = sc.fields[fi], on = function (id) { return $(id).checked; }, n = function (id) { return +$(id).value; };
+      var out = { defaults: { field: fi, view: current || 'oblique', ve: ve, marker: $('compass').value,
+        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites') },
+        cut: { w: n('cut-w'), e: n('cut-e'), s: n('cut-s'), n: n('cut-n'), t: n('cut-t'), b: n('cut-b') } } };
+      if (sc.times) out.defaults.time = ti;
+      if (!is2d) {
+        out.defaults.slices = { depth_km: +((nz - 1 - n('k')) * sp[2]).toFixed(2), x_km: +(n('i') * sp[0]).toFixed(2), y_km: +(n('j') * sp[1]).toFixed(2),
+          showDepth: on('on-k'), showX: on('on-i'), showY: on('on-j'), opacityDepth: n('op-k'), opacityX: n('op-i'), opacityY: n('op-j') };
+        out.defaults.showSolid = on('on-solid'); out.defaults.solidOpacity = n('s-op'); out.defaults.surfaceOpacity = n('surf-op');
+      }
+      out.field = { label: f.label, vmin: n('vmin'), vmax: n('vmax'), cmap: $('cmap').value, reverse: on('rev') };
+      if (!is2d) {
+        out.field.solid = {}; if (on('s-min-on')) out.field.solid.min = n('s-min'); if (on('s-max-on')) out.field.solid.max = n('s-max');
+        out.field.surfaces = $('surf').value.split(/[,;\s]+/).filter(Boolean).map(Number);
+      }
+      window.__lastSettings = out;
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy settings'; }, 1500); };
+      navigator.clipboard.writeText(JSON.stringify(out, null, 1)).then(done, done);
+    };
+
     extentNote();
-    $('ve').value = String(sc.ve || 1);
-    useField(false); applyScale(); updateSolid(); updateSurfs(); setVE(+$('ve').value); sync(); view(is2d ? 'south' : 'oblique');
+    await applyDefaults();
     msg.remove();
-    window.__viewer = { win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
+    window.__viewer = { win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
       surfs: function () { return surfs; }, ve: function () { return ve; },
       state: function () { return { field: fi, time: ti, stem: stemOf(), loaded: Object.keys(cache).length, solid: solidState }; } };
   } catch (e) {

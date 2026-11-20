@@ -35,6 +35,8 @@
   .tabs3 button { flex: 1; font: 600 12.5px var(--sans); padding: 9px 2px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; }
   .tabs3 button:hover { color: var(--text); }
   .tabs3 button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface); }
+  .cp-foot { margin-top: auto; padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
+  .cp-foot .btn { flex: 1; padding: 6px 8px; font-size: 12.5px; text-align: center; }
   .pane { padding: 14px; display: grid; gap: 14px; align-content: start; overflow-y: auto; }
   .grp { display: grid; gap: 6px; }
   .grp + .grp { padding-top: 12px; border-top: 1px solid var(--line); }
@@ -96,6 +98,7 @@
   <div class="app" id="app">
     <aside class="cp" aria-label="Viewer controls">
       <div class="cp-data">
+        <div class="grp" id="preset-row"><span class="label">Author's views</span><select id="preset" aria-label="Author's views"></select></div>
         <div class="grp" id="field-row"><span class="label">Show</span><select id="field" aria-label="Field"></select></div>
         <div class="grp" id="time-row">
           <div class="line2"><span class="label">Time</span><output id="t-o" class="push"></output></div>
@@ -216,6 +219,10 @@
           <div class="line2"><button class="btn ghost" id="vreset" type="button" style="padding:5px 12px">Reset</button></div>
         </div>
       </section>
+      <div class="cp-foot">
+        <button class="btn ghost" id="to-defaults" type="button" title="Put every setting back to how this model opens">Model defaults</button>
+        <button class="btn ghost" id="copy-settings" type="button" title="Copy the current settings as text, for setting a model's defaults">Copy settings</button>
+      </div>
     </aside>
 
     <div class="v3d">
@@ -271,6 +278,6 @@
 <script src="data.js"></script>
 <script src="mockup.js?v=3"></script>
 <script src="https://unpkg.com/vtk.js@34.16.3/vtk.js"></script>
-<script src="viewer3d.js?v=6"></script>
+<script src="viewer3d.js?v=8"></script>
 </body>
 </html>

@@ -11,13 +11,7 @@
    "electrical resistivity",
    "IOCG"
   ],
-  "caption": "Pilot data: Vulcan 2022 Level 3 Model 1 (smooth), padding removed, resampled to a 96 × 96 × 128 grid for viewing. Axes are in kilometres from the south-west corner of the model; depth is shown as negative numbers. The grid's vertical step is about 160 m, so layering in the top few hundred metres is not resolved here; use the model files for that. Site positions are from the EDI headers.",
   "sites": "vulcan-2022-sites.json",
-  "slices": {
-   "k": 110,
-   "i": 48,
-   "j": 48
-  },
   "fields": [
    {
     "label": "Resistivity",
@@ -32,6 +26,79 @@
     "surfaces": [
      100
     ]
+   }
+  ],
+  "defaults": {
+   "view": "oblique",
+   "ve": 1,
+   "marker": "cube",
+   "slices": {
+    "depth_km": 2.7,
+    "y_km": 8.7,
+    "showDepth": true,
+    "showX": false,
+    "showY": true
+   },
+   "solidOpacity": 100,
+   "surfaceOpacity": 40
+  },
+  "views": [
+   {
+    "name": "Shallow conductor under cover",
+    "defaults": {
+     "view": "oblique",
+     "ve": 2,
+     "cut": {
+      "b": 14
+     },
+     "slices": {
+      "depth_km": 1.5,
+      "y_km": 8.7,
+      "showDepth": true,
+      "showY": true
+     },
+     "show": {
+      "sites": true
+     },
+     "surfaceOpacity": 40
+    },
+    "field": {
+     "vmin": 5,
+     "vmax": 300,
+     "cmap": "ryb",
+     "solid": {
+      "max": 20
+     },
+     "surfaces": []
+    }
+   },
+   {
+    "name": "Deep conductor, section from the south",
+    "defaults": {
+     "view": "south",
+     "ve": 1,
+     "cut": {
+      "s": 8.7
+     },
+     "slices": {
+      "showDepth": false,
+      "showY": false,
+      "showX": false
+     },
+     "show": {
+      "sites": false
+     },
+     "solidOpacity": 100
+    },
+    "field": {
+     "vmin": 5,
+     "vmax": 1000,
+     "cmap": "ryb",
+     "solid": {
+      "max": 60
+     },
+     "surfaces": []
+    }
    }
   ]
  },
@@ -48,7 +115,6 @@
    "sunda",
    "earthquake"
   ],
-  "caption": "Pilot data: the final saved step of the Underworld2 run (35 million mesh nodes), read from NCI at every fourth node sideways and 96 depth levels. The model is a spherical cap; it is shown here unwrapped into a box, so horizontal distances are arc lengths at the surface and curvature is not drawn. The two horizontal axes are the model's own directions, not geographic east and north. Values are in the model's own units.",
   "compass": [
    "X+",
    "X−",
@@ -60,11 +126,6 @@
    "north": "+Y side",
    "east": "+X side",
    "west": "−X side"
-  },
-  "slices": {
-   "showK": false,
-   "showI": true,
-   "showJ": true
   },
   "fields": [
    {
@@ -86,7 +147,60 @@
     }
    }
   ],
-  "ve": 2
+  "defaults": {
+   "field": 1,
+   "view": "oblique",
+   "ve": 2,
+   "marker": "cube",
+   "slices": {
+    "showDepth": false,
+    "showX": true,
+    "showY": true
+   },
+   "surfaceOpacity": 50
+  },
+  "views": [
+   {
+    "name": "Viscosity layering",
+    "defaults": {
+     "field": 0,
+     "view": "south",
+     "ve": 3,
+     "slices": {
+      "showDepth": false,
+      "showX": false,
+      "showY": true
+     },
+     "showSolid": false
+    },
+    "field": null
+   },
+   {
+    "name": "Slab from below the plate",
+    "defaults": {
+     "field": 1,
+     "view": "oblique",
+     "ve": 2,
+     "cut": {
+      "t": 150
+     },
+     "slices": {
+      "showDepth": false,
+      "showX": false,
+      "showY": false
+     },
+     "show": {
+      "axes": true
+     }
+    },
+    "field": {
+     "solid": {
+      "min": 3e-05
+     },
+     "surfaces": []
+    }
+   }
+  ]
  },
  "detachment": {
   "slug": "sandiford-2021-detachment",
@@ -100,7 +214,6 @@
    "faulting",
    "detachment faults"
   ],
-  "caption": "Pilot data: the reference ASPECT run (ref_model_hires), nine of its 258 saved steps. The model is a 2D section 400 km wide and 100 km deep; this view shows the central 100 km and the top 25 km, where the fault is, sampled at about 83 m. White above the surface is outside the model. Each field keeps one colour range for all time steps; the most extreme 0.1 % of values at each end are shown at the ends of the scale.",
   "viewNames": {
    "south": "Reset view"
   },
@@ -171,6 +284,11 @@
     "cmap": "ryb",
     "reverse": true
    }
-  ]
+  ],
+  "defaults": {
+   "field": 0,
+   "ve": 1,
+   "marker": "cube"
+  }
  }
 }
