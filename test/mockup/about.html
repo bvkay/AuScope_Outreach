@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
+<title>About — M@TE (mockup)</title>
+<link rel="stylesheet" href="mockup.css?v=5">
+</head>
+<body data-page="about">
+<!-- About page. Wording is the live site's own (about.qmd), regrouped and without emoji. -->
+
+<main class="wrap">
+  <div class="page-head">
+    <h1>About M@TE</h1>
+    <p class="lead">M@TE is designed to meet geoscientists where they are: from educators and students using visualisations in the classroom to researchers developing and benchmarking new numerical models. It lowers the learning curve of numerical models and bridges the gap between traditional geology and numerical geosciences.</p>
+  </div>
+
+  <div class="model-layout">
+    <div class="stack prose">
+      <section>
+        <h2>What you can do</h2>
+        <div class="cards2">
+          <div class="panel"><p class="label">Explore</p><h3>Explore and visualise models</h3><p>Play animations through the web interface, and use them in your teaching or to better understand Earth system concepts.</p></div>
+          <div class="panel"><p class="label">Reuse</p><h3>Download and build on models</h3><p>Access input files and configuration scripts to reproduce or expand upon simulations on your own.</p></div>
+          <div class="panel"><p class="label">Compare</p><h3>Analyse and benchmark outputs</h3><p>Compare results across models and datasets without having to recreate simulations from scratch.</p></div>
+          <div class="panel"><p class="label">Contribute</p><h3>Upload your own models</h3><p>Package code, metadata and outputs with streamlined tools. Models are stored, preserved and assigned a DOI for citation. Currently by invitation only.</p></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <p><b>Together we build reproducible, reusable, robust models. It takes a village, so please cite the models you use.</b></p>
+        <figure><img src="https://mate.science/images/Mate_trinity.jpg" alt="The M@TE trinity"></figure>
+      </section>
+
+      <section>
+        <h2>How M@TE works</h2>
+        <p>M@TE combines a user-friendly experience with a robust backend built on widely adopted, sustainable infrastructure. Users browse model summaries through the website, which links to GitHub and NCI repositories for downloading code and outputs. Behind the scenes, carefully chosen tools ensure consistency, accessibility and long-term preservation.</p>
+        <div class="cards2">
+          <div class="panel"><p class="label">Packaging</p><h3>RO-Crates</h3><p>Model metadata is packaged using the <a href="https://www.researchobject.org/ro-crate/mate">RO-Crate standard</a>, a lightweight JSON-LD format that captures rich metadata and references model components. This keeps models machine-readable and FAIR.</p></div>
+          <div class="panel"><p class="label">Submission</p><h3>GitHub</h3><p>Models are submitted through structured <a href="https://github.com/ModelAtlasofTheEarth/model-submission">GitHub issue templates</a>. Metadata is validated and enriched automatically, connecting to Crossref, DataCite and ORCID.</p></div>
+          <div class="panel"><p class="label">Showcasing</p><h3>Quarto</h3><p>The website is built with <a href="https://quarto.org">Quarto</a>, a scientific publishing system that delivers a fast, lightweight interface with figures, animations and interactive content.</p></div>
+          <div class="panel"><p class="label">Storage</p><h3>NCI GeoNetwork</h3><p>Model outputs are stored and preserved through NCI's <a href="https://geonetwork.nci.org.au/">GeoNetwork</a>, which supports terabyte-scale data, assigns persistent DOIs and makes models discoverable through standard catalogue services.</p></div>
+        </div>
+      </section>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <p class="label">The atlas today</p>
+        <dl class="kv">
+          <div><dt>Models</dt><dd class="mono" id="n-models">–</dd></div>
+          <div><dt>Contributors</dt><dd class="mono" id="n-people">–</dd></div>
+          <div><dt>Years covered</dt><dd class="mono" id="n-years">–</dd></div>
+        </dl>
+      </div>
+      <div class="panel">
+        <p class="label">Take part</p>
+        <a class="btn" id="browse" href="#">Browse the models</a>
+        <a class="btn ghost" href="https://github.com/ModelAtlasofTheEarth/model-submission/issues/new?template=model_submission.yml">Submit a model</a>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script src="mockup.js?v=4"></script>
+<script>
+(function () {
+  var A = window.MATE, ys = A.models.map(function (m) { return m.year; }).filter(Boolean);
+  document.getElementById('n-models').textContent = A.models.length;
+  document.getElementById('n-people').textContent = A.nPeople;
+  document.getElementById('n-years').textContent = Math.min.apply(null, ys) + '–' + Math.max.apply(null, ys);
+  document.getElementById('browse').href = document.querySelector('.brand').getAttribute('href');
+})();
+</script>
+</body>
+</html>

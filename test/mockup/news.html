@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
+<title>News — M@TE (mockup)</title>
+<link rel="stylesheet" href="mockup.css?v=5">
+</head>
+<body data-page="news">
+<!-- News. The three dated items are the live site's own (news/index.qmd). "Latest models" is new:
+     it is filled from the model list, so the page has fresh content whenever a model is added. -->
+
+<main class="wrap">
+  <div class="page-head">
+    <h1>News</h1>
+    <p class="lead">Announcements, publications and events from the M@TE community.</p>
+  </div>
+
+  <div class="model-layout">
+    <div class="stack">
+      <section class="panel">
+        <ul class="news-list">
+          <li><time datetime="2026-06">June 2026</time><div><h3>Website revamp</h3><p>The M@TE website is now powered by <a href="https://quarto.org/">Quarto</a>.</p></div></li>
+          <li><time datetime="2025-06">June 2025</time><div><h3>Recognised by NCI</h3><p>NCI recognises M@TE in its 2025 <a href="https://nci.org.au/about-us/annual-reports">annual report</a>, page 34.</p></div></li>
+          <li><time datetime="2025-01">January 2025</time><div><h3>Featured by RO-Crate</h3><p>M@TE features on the RO-Crate <a href="https://www.researchobject.org/ro-crate/mate">website</a>.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <p class="label" style="margin-bottom:12px">Latest models</p>
+        <ul class="news-list" id="latest"></ul>
+      </section>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <p class="label">Follow M@TE</p>
+        <p style="font-size:14px;margin:6px 0 12px">New models and platform updates are announced on GitHub.</p>
+        <a class="btn ghost" href="https://github.com/ModelAtlasofTheEarth">ModelAtlasofTheEarth on GitHub</a>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script src="mockup.js?v=4"></script>
+<script>
+(function () {
+  var A = window.MATE;
+  document.getElementById('latest').innerHTML = A.models.slice(0, 5).map(function (m) {
+    return '<li><time>' + (m.year || '') + '</time><div><h3><a href="' + A.href(m) + '" style="color:inherit;text-decoration:none">' + A.esc(m.title) + '</a></h3><p>' + A.esc(A.who(m)) + '</p></div></li>';
+  }).join('');
+})();
+</script>
+</body>
+</html>

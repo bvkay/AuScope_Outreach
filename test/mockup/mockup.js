@@ -30,7 +30,11 @@
       '<span class="wordmark wm-' + v + '" role="img" aria-label="M@TE">M<span class="at"></span>TE</span>' +
     '</a>' +
     '<nav class="nav" aria-label="Main">' +
-      '<a href="' + home + '" aria-current="page">Models</a><a href="#">News</a><a href="#">About</a><a href="#">Team</a>' +
+      [['Models', home, ''], ['News', 'news.html', 'news'], ['About', 'about.html', 'about'], ['Team', 'team.html', 'team']].map(function (n) {
+        var here = (document.body.dataset.page || '') === n[2];
+        var href = n[2] ? n[1] + '?v=' + v + (fq ? '&f=' + fq : '') : n[1];
+        return '<a href="' + href + '"' + (here ? ' aria-current="page"' : '') + '>' + n[0] + '</a>';
+      }).join('') +
       '<a class="plain" href="https://github.com/ModelAtlasofTheEarth/model-submission/issues/new?template=model_submission.yml">Submit a model</a>' +
     '</nav>' +
     '<div class="tagline">Model Atlas of the Earth</div></header>';
