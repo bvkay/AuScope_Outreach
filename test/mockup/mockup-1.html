@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
+<title>M@TE mockup 1 — featured + grid</title>
+<link rel="stylesheet" href="mockup.css?v=3">
+</head>
+<body data-variant="1">
+<!-- Mockup 1: latest model shown large and static, then every model in a card grid. -->
+
+<main class="wrap">
+  <section class="intro">
+    <h1>Model Atlas of the Earth</h1>
+    <p>Open, citable computational models of Earth processes. Each model is published with its inputs, outputs and a DOI.</p>
+    <p class="stats"><b id="n-models">–</b> models · <b id="n-creators">–</b> contributors · <b id="n-tags">–</b> topics</p>
+  </section>
+
+  <article class="featured" id="featured" aria-label="Latest model"></article>
+
+  <div class="toolbar">
+    <h2>All models</h2>
+    <span class="count" id="count"></span>
+    <input id="q" type="search" placeholder="Search title, author or topic" aria-label="Search models">
+    <select id="sort" aria-label="Sort models">
+      <option value="new">Newest first</option>
+      <option value="old">Oldest first</option>
+      <option value="az">Title A–Z</option>
+    </select>
+  </div>
+  <div class="chips" id="chips" role="group" aria-label="Filter by topic"></div>
+  <div class="grid" id="grid"></div>
+
+  <section class="uses" aria-label="Using M@TE">
+    <div><p class="label">Explore</p><h3>See what a model does</h3>
+      <p>Every entry has figures, animations and a plain-language summary, suitable for teaching and for scoping research.</p></div>
+    <div><p class="label">Reuse</p><h3>Download inputs and outputs</h3>
+      <p>Input files and scripts are on GitHub. Output data is held at NCI, so results can be compared without rerunning.</p></div>
+    <div><p class="label">Contribute</p><h3>Publish your own model</h3>
+      <p>Submissions are packaged as RO-Crates, preserved, and given a DOI. <a href="https://github.com/ModelAtlasofTheEarth/model-submission/issues/new?template=model_submission.yml">Submit a model</a></p></div>
+  </section>
+</main>
+
+<script src="data.js"></script>
+<script src="mockup.js?v=3"></script>
+<script>
+(function () {
+  var A = window.MATE, M = A.models, esc = A.esc;
+  document.getElementById('n-models').textContent = M.length;
+  document.getElementById('n-creators').textContent = A.nPeople;
+  document.getElementById('n-tags').textContent = Object.keys(A.topics).length;
+
+  var newest = M[0];
+  document.getElementById('featured').innerHTML =
+    '<div class="fig">' + A.img(newest) + '</div>' +
+    '<div class="body"><p class="label">Latest model</p>' +
+    '<h2><a href="' + A.href(newest) + '">' + esc(newest.title) + '</a></h2>' +
+    A.byline(newest) + A.tags(newest, 6) +
+    '<p class="doi">doi:' + esc(newest.doi) + '</p>' +
+    '<p class="cta"><a class="btn" href="' + A.href(newest) + '">View model</a></p></div>';
+
+  // only topics shared by more than one model are useful as filters
+  var shared = Object.keys(A.topics).filter(function (k) { return A.topics[k] > 1; }).sort();
+  var active = '', chips = document.getElementById('chips');
+  chips.innerHTML = shared.map(function (k) {
+    return '<button class="chip" aria-pressed="false" data-t="' + esc(k) + '">' + esc(k) + ' <span class="count">' + A.topics[k] + '</span></button>';
+  }).join('');
+  chips.addEventListener('click', function (e) {
+    var b = e.target.closest('.chip'); if (!b) return;
+    active = active === b.dataset.t ? '' : b.dataset.t;
+    [].forEach.call(chips.children, function (c) { c.setAttribute('aria-pressed', c.dataset.t === active); });
+    draw();
+  });
+
+  var q = document.getElementById('q'), sort = document.getElementById('sort');
+  q.addEventListener('input', draw); sort.addEventListener('change', draw);
+  function draw() {
+    var rows = A.find(q.value, active ? [active] : [], [], sort.value);
+    document.getElementById('count').textContent = rows.length + ' of ' + M.length + ' shown';
+    document.getElementById('grid').innerHTML = rows.length ? rows.map(function (m) {
+      return '<a class="card" href="' + A.href(m) + '"><div class="thumb">' + A.img(m, true) + '</div>' +
+        '<div class="body">' + A.byline(m) + '<h3>' + esc(m.title) + '</h3>' + A.tags(m, 3) +
+        '<p class="doi">doi:' + esc(m.doi) + '</p></div></a>';
+    }).join('') : '<p class="empty" style="grid-column:1/-1">No models match that search.</p>';
+  }
+  draw();
+})();
+</script>
+</body>
+</html>

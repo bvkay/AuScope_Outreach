@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
+<title>Viewer pilot — M@TE (mockup)</title>
+<link rel="stylesheet" href="mockup.css?v=3">
+<style>
+  .scene-links { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 14px; font-size: 13px; color: var(--muted); }
+  .scene-links a { padding: 4px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); text-decoration: none; font-weight: 600; }
+  .scene-links a[aria-current] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ── the viewer: control panel on the left, model on the right ── */
+  .app { display: grid; grid-template-columns: 300px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 18px; }
+  .app:fullscreen { border: 0; border-radius: 0; height: 100vh; }
+  .app:fullscreen #view { height: 100vh; }
+  .app [hidden] { display: none !important; }
+
+  .cp { border-right: 1px solid var(--line); display: flex; flex-direction: column; font-size: 13.5px; min-height: 0; }
+  .cp-data { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+  .cp-data:empty { display: none; }
+  .cp select, .cp input.num { font: 400 13px var(--sans); padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--text); }
+  .cp select { width: 100%; }
+  .cp input.num { width: 86px; font-family: var(--mono); }
+  .cp input.pc { width: 62px; }
+  .cp input[type=range] { width: 100%; accent-color: var(--accent); }
+  .cp input[type=checkbox] { accent-color: var(--accent); }
+  .cp output, .cp .val { font: 400 12px var(--mono); color: var(--muted); }
+  .cp .err { color: #EA1E31; font-size: 12.5px; }
+  .cp .help { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+  .tabs3 { display: flex; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .tabs3 button { flex: 1; font: 600 12.5px var(--sans); padding: 9px 2px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; }
+  .tabs3 button:hover { color: var(--text); }
+  .tabs3 button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface); }
+  .pane { padding: 14px; display: grid; gap: 14px; align-content: start; overflow-y: auto; }
+  .grp { display: grid; gap: 6px; }
+  .grp + .grp { padding-top: 12px; border-top: 1px solid var(--line); }
+  .grp > .label { margin-bottom: 2px; }
+  .line2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .line2 .push { margin-left: auto; }
+  .line2 label { display: inline-flex; align-items: center; gap: 6px; }
+  .views { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .views button { font: 600 12px var(--sans); padding: 6px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); cursor: pointer; }
+  .views button:hover { border-color: var(--accent); }
+  .views button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 8px; vertical-align: -1px; }
+  .key i:first-child { margin-left: 0; }
+
+  .v3d { position: relative; background: #fff; min-width: 0; }
+  #view { width: 100%; height: 620px; cursor: grab; }
+  #view:active { cursor: grabbing; }
+  .v3d .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; pointer-events: none; }
+  .v3d .busy { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); font: 400 12px var(--mono); background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
+  .scale { position: absolute; left: 12px; top: 12px; background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; font-size: 12px; }
+  .scale .ramp { width: 200px; height: 12px; border-radius: 2px; margin: 4px 0 2px; }
+  .scale .ticks { position: relative; height: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .scale .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .scale .ticks span:first-child { transform: none; }
+  .scale .ticks span:last-child { transform: translateX(-100%); }
+  .full { position: absolute; right: 12px; top: 12px; font: 600 12px var(--sans); padding: 6px 10px; border: 1px solid var(--line); border-radius: 5px; background: rgba(255,255,255,.92); color: var(--text); cursor: pointer; }
+  .full:hover { border-color: var(--accent); }
+
+  /* the record below the viewer */
+  .rec img, .rec video { max-width: 100%; height: auto; border-radius: 6px; margin: 8px 0; }
+  .rec p { margin: 0 0 10px; }
+  .rec pre.rec { font: 400 12.5px/1.5 var(--mono); white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; overflow-x: auto; }
+  .rec blockquote { margin: 0; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; font: 400 12.5px/1.5 var(--mono); }
+  .rec a { overflow-wrap: anywhere; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; }
+    .cp { border-right: 0; border-top: 1px solid var(--line); order: 2; }
+    #view { height: 400px; }
+  }
+</style>
+</head>
+<body>
+<!-- Viewer pilot. Each model is loaded as small uniform volumes and everything — solid, surfaces,
+     slices, rotation, time — is computed in the browser by vtk.js. No server is involved. -->
+
+<main class="wrap">
+  <p class="crumbs"><a href="#" onclick="history.back();return false">Models</a> / <span id="crumb"></span></p>
+  <p class="scene-links">Pilot models:
+    <a href="model-3d.html?scene=vulcan" data-s="vulcan">Vulcan · 3D inversion</a>
+    <a href="model-3d.html?scene=sunda" data-s="sunda">Sunda · 3D Underworld</a>
+    <a href="model-3d.html?scene=detachment" data-s="detachment">Detachment · 2D ASPECT over time</a>
+  </p>
+
+  <div class="model-head">
+    <h1 id="title"></h1>
+    <p class="byline" id="byline"></p>
+  </div>
+
+  <div class="app" id="app">
+    <aside class="cp" aria-label="Viewer controls">
+      <div class="cp-data">
+        <div class="grp" id="field-row"><span class="label">Show</span><select id="field" aria-label="Field"></select></div>
+        <div class="grp" id="time-row">
+          <div class="line2"><span class="label">Time</span><output id="t-o" class="push"></output></div>
+          <div class="line2"><button class="btn ghost" id="play" type="button" style="padding:5px 12px">Play</button><input type="range" id="t" min="0" max="0" step="1" aria-label="Time step" style="flex:1;width:auto"></div>
+        </div>
+      </div>
+
+      <div class="tabs3" role="tablist" id="tabs">
+        <button role="tab" aria-selected="true" data-p="view">View</button>
+        <button role="tab" aria-selected="false" data-p="extent">Extent</button>
+        <button role="tab" aria-selected="false" data-p="slices" id="tab-slices">Slices</button>
+        <button role="tab" aria-selected="false" data-p="volume" id="tab-volume">Volume</button>
+        <button role="tab" aria-selected="false" data-p="colour">Colour</button>
+      </div>
+
+      <!-- View: where you look from, and what is drawn around the model -->
+      <section class="pane" id="pane-view">
+        <div class="grp">
+          <span class="label">Look from</span>
+          <div class="views" id="views" role="group" aria-label="View direction">
+            <button type="button" data-v="oblique">Oblique</button>
+            <button type="button" data-v="above">Above</button>
+            <button type="button" data-v="south">South</button>
+            <button type="button" data-v="north">North</button>
+            <button type="button" data-v="east">East</button>
+            <button type="button" data-v="west">West</button>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="line2"><span>Vertical exaggeration</span>
+            <select id="ve" class="push" style="width:74px" aria-label="Vertical exaggeration"><option value="1">×1</option><option value="2">×2</option><option value="3">×3</option><option value="5">×5</option><option value="10">×10</option></select></div>
+          <p class="help" id="ve-note"></p>
+        </div>
+        <div class="grp">
+          <div class="line2"><label><input type="checkbox" id="on-outline" checked> Model outline</label></div>
+          <div class="line2"><label><input type="checkbox" id="on-axes" checked> Axes and distances (km)</label></div>
+          <div class="line2" id="sites-tick"><label><input type="checkbox" id="on-sites" checked> MT sites <span class="val" id="n-sites"></span></label></div>
+          <div class="line2"><span>Direction marker</span>
+            <select id="compass" class="push" style="width:104px" aria-label="Direction marker"><option value="cube">Cube</option><option value="arrows">Arrows</option><option value="off">Off</option></select></div>
+          <p class="help key" id="arrow-key" hidden></p>
+        </div>
+        <p class="help">Drag to rotate · scroll to zoom · shift-drag to pan</p>
+      </section>
+
+      <!-- Extent: trim the model in from any side -->
+      <section class="pane" id="pane-extent" hidden>
+        <div class="grp">
+          <span class="label">Cut in from (km)</span>
+          <div class="line2"><span id="cut-w-l">West</span><input type="number" class="num push" id="cut-w" min="0" step="any" value="0" aria-label="Cut in from the west, kilometres"></div>
+          <div class="line2"><span id="cut-e-l">East</span><input type="number" class="num push" id="cut-e" min="0" step="any" value="0" aria-label="Cut in from the east, kilometres"></div>
+          <div class="line2" id="cut-s-row"><span id="cut-s-l">South</span><input type="number" class="num push" id="cut-s" min="0" step="any" value="0" aria-label="Cut in from the south, kilometres"></div>
+          <div class="line2" id="cut-n-row"><span id="cut-n-l">North</span><input type="number" class="num push" id="cut-n" min="0" step="any" value="0" aria-label="Cut in from the north, kilometres"></div>
+          <div class="line2"><span>Top</span><input type="number" class="num push" id="cut-t" min="0" step="any" value="0" aria-label="Cut down from the top, kilometres"></div>
+          <div class="line2"><span>Bottom</span><input type="number" class="num push" id="cut-b" min="0" step="any" value="0" aria-label="Cut up from the bottom, kilometres"></div>
+          <output id="cut-o"></output><span class="err" id="cut-err" role="alert"></span>
+          <div class="line2"><button class="btn ghost" id="cut-reset" type="button" style="padding:5px 12px">Show whole model</button></div>
+        </div>
+        <p class="help">Each number trims that far in from its side. Slices, the solid body, surfaces and axes all follow the trimmed box.</p>
+      </section>
+
+      <!-- Slices: flat cuts through the model -->
+      <section class="pane" id="pane-slices" hidden>
+        <div class="grp" id="k-ctl">
+          <div class="line2"><label><input type="checkbox" id="on-k" checked> <b>Depth slice</b></label><output id="k-o" class="push"></output></div>
+          <input type="range" id="k" min="0" step="1" aria-label="Depth slice position">
+          <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="op-k" min="10" max="100" step="10" value="100" aria-label="Depth slice opacity, percent"> %</span></div>
+        </div>
+        <div class="grp" id="i-ctl">
+          <div class="line2"><label><input type="checkbox" id="on-i"> <b id="i-name"></b></label><output id="i-o" class="push"></output></div>
+          <input type="range" id="i" min="0" step="1" aria-label="Section position">
+          <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="op-i" min="10" max="100" step="10" value="100" aria-label="Section opacity, percent"> %</span></div>
+        </div>
+        <div class="grp" id="j-ctl">
+          <div class="line2"><label><input type="checkbox" id="on-j" checked> <b id="j-name"></b></label><output id="j-o" class="push"></output></div>
+          <input type="range" id="j" min="0" step="1" aria-label="Section position">
+          <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="op-j" min="10" max="100" step="10" value="100" aria-label="Section opacity, percent"> %</span></div>
+        </div>
+      </section>
+
+      <!-- Volume: a solid body between two values, and surfaces at typed values -->
+      <section class="pane" id="pane-volume" hidden>
+        <div class="grp" id="solid-ctl">
+          <div class="line2"><label><input type="checkbox" id="on-solid" checked> <b>Solid body</b></label><output id="s-o" class="push"></output></div>
+          <div class="line2"><label><input type="checkbox" id="s-min-on"> From</label><span class="push"><input class="num" id="s-min" inputmode="decimal" aria-label="Solid body minimum"> <span class="unit val"></span></span></div>
+          <div class="line2"><label><input type="checkbox" id="s-max-on"> Up to</label><span class="push"><input class="num" id="s-max" inputmode="decimal" aria-label="Solid body maximum"> <span class="unit val"></span></span></div>
+          <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="s-op" min="10" max="100" step="10" value="100" aria-label="Solid body opacity, percent"> %</span></div>
+          <span class="err" id="s-err" role="alert"></span>
+          <p class="help">Everything in the range, closed off at the edge of the model.</p>
+        </div>
+        <div class="grp" id="surf-ctl">
+          <span><b>Surfaces at</b> <span class="unit val"></span></span>
+          <input class="num" id="surf" style="width:100%" placeholder="e.g. 10, 100" aria-label="Surface values, separated by commas">
+          <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="surf-op" min="10" max="100" step="10" value="50" aria-label="Surface opacity, percent"> %</span></div>
+          <span class="err" id="surf-err" role="alert"></span>
+          <p class="help">Up to six values, separated by commas. Each draws an open surface.</p>
+        </div>
+      </section>
+
+      <!-- Colour: the scale used by everything -->
+      <section class="pane" id="pane-colour" hidden>
+        <div class="grp">
+          <span class="label">Colour scale</span>
+          <select id="cmap" aria-label="Colour scale">
+            <option value="mt">MT rainbow (warm = low)</option>
+            <option value="jet">Jet</option>
+            <option value="Viridis (matplotlib)">Viridis</option>
+            <option value="Inferno (matplotlib)">Inferno</option>
+            <option value="ryb">Red – yellow – blue (red = low)</option>
+            <option value="Grayscale">Greyscale</option>
+          </select>
+          <div class="line2"><label><input type="checkbox" id="rev"> Reverse</label></div>
+        </div>
+        <div class="grp">
+          <span class="label">Limits <span class="unit" style="text-transform:none;letter-spacing:0"></span></span>
+          <div class="line2"><span>From</span><input class="num push" id="vmin" inputmode="decimal" aria-label="Scale minimum"></div>
+          <div class="line2"><span>To</span><input class="num push" id="vmax" inputmode="decimal" aria-label="Scale maximum"></div>
+          <span class="err" id="verr" role="alert"></span>
+          <div class="line2"><button class="btn ghost" id="vreset" type="button" style="padding:5px 12px">Reset</button></div>
+        </div>
+      </section>
+    </aside>
+
+    <div class="v3d">
+      <div id="view"></div>
+      <div class="msg" id="msg">Loading model…</div>
+      <div class="busy" id="busy" hidden>loading…</div>
+      <div class="scale">
+        <b id="scale-title"></b>
+        <div class="ramp" id="ramp"></div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <button class="full" id="full" type="button">Full screen</button>
+    </div>
+  </div>
+
+  <div class="model-layout" style="margin-top:22px">
+    <div>
+      <div class="panel">
+        <p class="label" style="margin-bottom:8px">Snapshot</p>
+        <div class="rec" id="r-snapshot"></div>
+      </div>
+
+      <div class="tabs" role="tablist" id="rtabs">
+        <button role="tab" aria-selected="true" data-p="overview">Science overview</button>
+        <button role="tab" aria-selected="false" data-p="model">Model &amp; software</button>
+        <button role="tab" aria-selected="false" data-p="meta">Metadata</button>
+      </div>
+      <section class="panel tabpanel rec" id="r-overview"></section>
+      <section class="panel tabpanel rec" id="r-model" hidden></section>
+      <section class="panel tabpanel rec" id="r-meta" hidden></section>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <p class="label">Cite this model</p>
+        <p class="cite" id="r-cite"></p>
+        <button class="btn ghost" id="r-copy" type="button">Copy citation</button>
+      </div>
+      <div class="panel" id="r-get">
+        <p class="label">Get the model</p>
+      </div>
+      <div class="panel">
+        <dl class="kv">
+          <div id="r-dois" style="display:contents"></div>
+          <div><dt>Topics</dt><dd><ul class="tags" id="tags"></ul></dd></div>
+          <div><dt>Creators</dt><dd><ul class="people" id="r-creators"></ul></dd></div>
+        </dl>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script src="mockup.js?v=3"></script>
+<script src="https://unpkg.com/vtk.js@34.16.3/vtk.js"></script>
+<script src="viewer3d.js?v=6"></script>
+</body>
+</html>

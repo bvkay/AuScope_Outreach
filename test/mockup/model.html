@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model page — M@TE (mockup)</title>
+<link rel="stylesheet" href="mockup.css?v=3">
+</head>
+<body>
+<!-- Mockup of one model page. Content copied from the live page for
+     sandiford-2021-detachment; every model link on the home page lands here. -->
+
+<main class="wrap">
+  <p class="crumbs"><a href="#" onclick="history.back();return false">Models</a> / sandiford-2021-detachment</p>
+
+  <div class="model-head">
+    <h1>Kinematics of Footwall Exhumation at Oceanic Detachment faults: Solid‐Block Rotation and Apparent Unbending</h1>
+    <p class="byline"><b>Dan Sandiford, Sascha Brune, Anne Glerum, John Naliboff, Joanne M. Whittaker</b> · 2021</p>
+  </div>
+
+  <div class="model-layout">
+    <div>
+      <figure class="panel lead-fig">
+        <video controls muted loop playsinline preload="metadata"
+               poster="https://raw.githubusercontent.com/ModelAtlasofTheEarth/sandiford-2021-detachment/main/.website_material/graphics/fig1.png">
+          <source src="https://raw.githubusercontent.com/ModelAtlasofTheEarth/sandiford-2021-detachment/main/.website_material/graphics/animation.mp4">
+        </video>
+        <figcaption>Animation showing alternative model (see paper for detail). Colormap shows vorticity/rotation rate. Velocity vectors are shown in the hangingwall reference frame. Dark regions show the accumulation of plastic strain.</figcaption>
+      </figure>
+
+      <div class="panel">
+        <p class="label" style="margin-bottom:8px">Snapshot</p>
+        <p class="snapshot">This model was developed in order to study the rotation of footwall rocks beneath oceanic detachment faults (ODFs). It showed that solid-block rotation dominates beneath a concave-down fault, while significant flexural stresses form later during apparent unbending, causing both compression and extension-related brittle strain within oceanic core complexes (OCCs).</p>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-p="science">Science overview</button>
+        <button role="tab" aria-selected="false" data-p="software">Model &amp; software</button>
+        <button role="tab" aria-selected="false" data-p="meta">Metadata</button>
+      </div>
+
+      <section class="panel tabpanel" id="p-science">
+        <h2>Associated publication</h2>
+        <p>Sandiford, Brune, Glerum, Naliboff &amp; Whittaker. <i>Kinematics of Footwall Exhumation at Oceanic Detachment faults: Solid‐Block Rotation and Apparent Unbending.</i> <a href="https://doi.org/10.1029/2021gc009681">doi:10.1029/2021gc009681</a></p>
+        <h2>Abstract</h2>
+        <p>Seafloor spreading at slow rates can be accommodated on large‐offset oceanic detachment faults (ODFs), that exhume lower crustal and mantle rocks in footwall domes termed oceanic core complexes (OCCs). <span style="color:var(--muted)">[abstract continues, as on the live page]</span></p>
+        <figure>
+          <img src="https://raw.githubusercontent.com/ModelAtlasofTheEarth/sandiford-2021-detachment/main/.website_material/graphics/fig4.png" alt="Graphic abstract">
+        </figure>
+      </section>
+
+      <section class="panel tabpanel" id="p-software" hidden>
+        <h2>Software</h2>
+        <p>geodynamics/aspect: ASPECT 2.5.0 · <a href="https://doi.org/10.5281/zenodo.8200213">doi:10.5281/zenodo.8200213</a></p>
+        <h2>Model setup</h2>
+        <figure>
+          <img src="https://raw.githubusercontent.com/ModelAtlasofTheEarth/sandiford-2021-detachment/main/.website_material/graphics/initialconds.png" alt="">
+          <figcaption style="padding-left:0">Initial conditions, showing mesh refinement.</figcaption>
+        </figure>
+        <h2>Input notes</h2>
+        <p>ASPECT input files for model. Input file has been updated for compatibility with more recent ASPECT versions.</p>
+        <h2>Output notes</h2>
+        <p>Data directory contains output data for 2 simulations: ref_model_hires and alt_model_hires. Topography and mesh variables were output at 100 Kyr intervals. Model end time is 5 Myr.</p>
+      </section>
+
+      <section class="panel tabpanel" id="p-meta" hidden>
+        <h2>M@TE submission</h2>
+        <p><a href="https://github.com/ModelAtlasofTheEarth/sandiford-2021-detachment">github.com/ModelAtlasofTheEarth/sandiford-2021-detachment</a></p>
+        <h2>Research tags</h2>
+        <ul class="tags"><li>tectonics</li><li>faulting</li><li>detachment faults</li></ul>
+      </section>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <p class="label">Cite this model</p>
+        <p class="cite" id="cite">Sandiford, D., Brune, S., Glerum, A., Naliboff, J., &amp; Whittaker, J. (2024). Kinematics of Footwall Exhumation at Oceanic Detachment faults: Solid‐Block Rotation and Apparent Unbending [Data set]. AuScope, National Computational Infrastructure. https://doi.org/10.25914/r3ya-bg54</p>
+        <button class="btn ghost" id="copy" type="button">Copy citation</button>
+      </div>
+
+      <div class="panel">
+        <p class="label">Get the model</p>
+        <a class="btn" href="https://thredds.nci.org.au/thredds/catalog/nm08/MATE/sandiford-2021-detachment/catalog.html">Output data at NCI</a>
+        <a class="btn ghost" href="https://github.com/dansand/odf_paper">Code and inputs on GitHub</a>
+      </div>
+
+      <div class="panel">
+        <dl class="kv">
+          <div><dt>M@TE DOI</dt><dd class="mono"><a href="https://doi.org/10.25914/r3ya-bg54">10.25914/r3ya-bg54</a></dd></div>
+          <div><dt>Publication DOI</dt><dd class="mono"><a href="https://doi.org/10.1029/2021gc009681">10.1029/2021gc009681</a></dd></div>
+          <div><dt>Software</dt><dd>ASPECT 2.5.0</dd></div>
+          <div><dt>Topics</dt><dd><ul class="tags"><li>tectonics</li><li>faulting</li><li>detachment faults</li></ul></dd></div>
+          <div><dt>Creators</dt><dd><ul class="people"><li>Dan Sandiford</li><li>Sascha Brune</li><li>Anne Glerum</li><li>John Naliboff</li><li>Joanne M. Whittaker</li></ul></dd></div>
+        </dl>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script src="mockup.js?v=3"></script>
+<script>
+document.querySelector('.tabs').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  [].forEach.call(this.children, function (t) { t.setAttribute('aria-selected', t === b); });
+  [].forEach.call(document.querySelectorAll('.tabpanel'), function (p) { p.hidden = p.id !== 'p-' + b.dataset.p; });
+});
+document.getElementById('copy').addEventListener('click', function () {
+  var btn = this;
+  navigator.clipboard.writeText(document.getElementById('cite').textContent).then(function () {
+    btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy citation'; }, 1500);
+  });
+});
+</script>
+</body>
+</html>

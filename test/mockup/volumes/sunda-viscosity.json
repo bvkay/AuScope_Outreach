@@ -1,0 +1,35 @@
+{
+ "source": "viscosityField.00001.h5",
+ "field": "Viscosity",
+ "units": "model units",
+ "log": true,
+ "dims": [
+  113,
+  153,
+  96
+ ],
+ "spacing_km": [
+  58.57589885740148,
+  58.52364560239934,
+  30.431578947368422
+ ],
+ "extent_km": [
+  6560.500672028966,
+  8895.5941315647,
+  2891.0
+ ],
+ "axes": [
+  "Across (km at surface)",
+  "Along (km at surface)",
+  "Depth (km)"
+ ],
+ "note": "Spherical cap shown unwrapped: horizontal distances are arc lengths at the surface.",
+ "scale": {
+  "lo": -0.1,
+  "hi": 3.1,
+  "dtype": "uint16-le",
+  "nodata": 0,
+  "value": "lo + (raw - 1) / 65534 * (hi - lo)"
+ },
+ "nodata_voxels": 0
+}

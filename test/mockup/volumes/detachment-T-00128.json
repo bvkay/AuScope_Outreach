@@ -1,0 +1,38 @@
+{
+ "source": "solution-00128.pvtu",
+ "field": "Temperature",
+ "units": "K",
+ "log": false,
+ "time_yr": 2560821.03372,
+ "dims": [
+  1200,
+  1,
+  300
+ ],
+ "spacing_km": [
+  0.08340283569641367,
+  1,
+  0.08361204013377926
+ ],
+ "extent_km": [
+  100.0,
+  0,
+  25.0
+ ],
+ "axes": [
+  "Distance (km)",
+  "",
+  "Depth (km)"
+ ],
+ "x_origin_km": -50.0,
+ "crop": "central part of the model",
+ "scale": {
+  "lo": 294.37193579101563,
+  "hi": 1571.66845703125,
+  "dtype": "uint16-le",
+  "nodata": 0,
+  "value": "lo + (raw - 1) / 65534 * (hi - lo)",
+  "clipped": "values outside the 0.1 to 99.9 percentile range of all time steps are shown at the ends of the scale"
+ },
+ "nodata_voxels": 31731
+}
