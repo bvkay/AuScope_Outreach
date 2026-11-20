@@ -5,7 +5,7 @@
   var M = (window.MODELS || []).slice();
   var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   var FOOTERS = { band: 'Logo band + strip', row: 'Single row', fixed: 'Fixed strip', float: 'Floating logos', floatbare: 'Floating logos, no box', fixedfloat: 'Fixed line + floating logos', fixedfloatbare: 'Fixed line + floating logos, no box' };
-  var DEFAULT_F = { 1: 'band', 2: 'row', 3: 'fixed', 4: 'float', 5: 'band' };
+  var DEFAULT_F = { 1: 'fixedfloat', 2: 'fixedfloat', 3: 'fixedfloat', 4: 'fixedfloat', 5: 'fixedfloat' };   // the footer chosen 20 Nov 2026; the others stay in the switcher for comparison
   var dark = document.body.classList.contains('dark');   // mockup 5 only: white logos on a dark page
   var fq = (location.search.match(/[?&]f=(band|row|fixedfloatbare|fixedfloat|fixed|floatbare|float)/) || [])[1];
   var f = fq || DEFAULT_F[v];
