@@ -127,37 +127,6 @@
      "tilt": 12
     },
     "field": null
-   },
-   {
-    "name": "Top 5 km, as in the 2024 paper",
-    "defaults": {
-     "from": [
-      1,
-      -1,
-      1.1
-     ],
-     "viewAngle": 30,
-     "ve": 1,
-     "marker": "cube",
-     "show": {
-      "walls": true,
-      "outline": true,
-      "axes": true,
-      "sites": false
-     },
-     "slices": {
-      "showDepth": false,
-      "showX": false,
-      "showY": false
-     },
-     "showSolid": true,
-     "solidOpacity": 100,
-     "surfaceOpacity": 40,
-     "cut": {
-      "b": 15.4
-     }
-    },
-    "field": null
    }
   ],
   "fit": "vulcan-2022-fit.json",
