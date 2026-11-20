@@ -100,7 +100,8 @@
      "surfaces": []
     }
    }
-  ]
+  ],
+  "fit": "vulcan-2022-fit.json"
  },
  "sunda": {
   "slug": "gollapalli-2025-sundamegathrust",

@@ -243,23 +243,62 @@
     ren.addActor(axes);
 
     // ── observation sites, where the scene has them ──
-    var sites = null;
+    var sites = null, siteApi = null, S = null;
     if (sc.sites) {
-      var S = (await (await fetch('volumes/' + sc.sites)).json()).sites, pts = new Float32Array(S.length * 3), verts = new Uint32Array(S.length * 2);
-      var poly = DM.vtkPolyData.newInstance();
+      S = (await (await fetch('volumes/' + sc.sites)).json()).sites;
+      // Sites are plain dark points, or tinted by how well the model fits each one (see fit.js).
+      // A second, larger point sits just under the chosen site to mark it.
+      var shown = [], fitRGB = null, picked = null;
+      var poly = DM.vtkPolyData.newInstance(), ring = DM.vtkPolyData.newInstance();
+      var sMapper = Core.vtkMapper.newInstance(); sMapper.setInputData(poly); sMapper.setScalarModeToUsePointData(); sMapper.setColorModeToDirectScalars();
+      sites = Core.vtkActor.newInstance(); sites.setMapper(sMapper);
+      var rMapper = Core.vtkMapper.newInstance(); rMapper.setInputData(ring);
+      var ringActor = Core.vtkActor.newInstance(); ringActor.setMapper(rMapper); ringActor.getProperty().setPointSize(18); ringActor.getProperty().setColor(0.157, 0.145, 0.447);
       var placeSites = function () {
-        var n = 0;
-        if (cr.k1 === nz - 1) S.forEach(function (s) {
-          if (s.x < B[0] || s.x > B[1] || s.y < B[2] || s.y > B[3]) return;
-          pts[3 * n] = s.x; pts[3 * n + 1] = s.y; pts[3 * n + 2] = 0.05; verts[2 * n] = 1; verts[2 * n + 1] = n; n++;
+        shown = [];
+        if (cr.k1 === nz - 1) S.forEach(function (s, i) { if (!(s.x < B[0] || s.x > B[1] || s.y < B[2] || s.y > B[3])) shown.push(i); });
+        var n = shown.length, pts = new Float32Array(n * 3), verts = new Uint32Array(n * 2), rgb = new Uint8Array(n * 3);
+        var tint = !!fitRGB && $('on-sitefit').checked;
+        shown.forEach(function (si, q) {
+          var p = S[si];
+          pts.set([p.x, p.y, 0.05], 3 * q); verts[2 * q] = 1; verts[2 * q + 1] = q; rgb.set((tint && fitRGB[p.id]) || [13, 13, 13], 3 * q);
         });
-        poly.getPoints().setData(pts.slice(0, 3 * n), 3); poly.getVerts().setData(verts.slice(0, 2 * n)); poly.modified();
+        poly.getPoints().setData(pts, 3); poly.getVerts().setData(verts);
+        poly.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'rgb', numberOfComponents: 3, values: rgb }));
+        poly.modified();
+        sites.getProperty().setPointSize(tint ? 11 : 6);
+        var p = picked != null && shown.indexOf(picked) >= 0 ? S[picked] : null;
+        ring.getPoints().setData(new Float32Array(p ? [p.x, p.y, 0.03] : []), 3); ring.getVerts().setData(new Uint32Array(p ? [1, 0] : [])); ring.modified();
         $('n-sites').textContent = '(' + n + (n < S.length ? ' of ' + S.length : '') + ')';
       };
       placeSites();
-      var sMapper = Core.vtkMapper.newInstance(); sMapper.setInputData(poly);
-      sites = Core.vtkActor.newInstance(); sites.setMapper(sMapper); sites.getProperty().setPointSize(6); sites.getProperty().setColor(0.05, 0.05, 0.05);
+      ren.addActor(ringActor); scaled.push(ringActor);
       ren.addActor(sites); scaled.push(sites);
+
+      siteApi = {
+        onPick: null,
+        colour: function (byId) { fitRGB = byId; placeSites(); win.render(); },
+        select: function (id) { picked = null; S.forEach(function (p, i) { if (p.id === id) picked = i; }); placeSites(); win.render(); },
+        shown: function () { return shown.map(function (i) { return S[i].id; }); },
+        toScreen: function (id) {       // where a site is drawn, in page pixels; for checks
+          var p = S.filter(function (q) { return q.id === id; })[0], api = grw.getApiSpecificRenderWindow(), cv = api.getCanvas(), r = cv.getBoundingClientRect(), k = cv.width / r.width;
+          var d = api.worldToDisplay(p.x, p.y, 0.05 * ve, ren); return [r.left + d[0] / k, r.bottom - d[1] / k];
+        }
+      };
+      $('on-sitefit').addEventListener('input', function () { placeSites(); win.render(); });
+      // a click (not a drag) on a site chooses it
+      var down = null;
+      $('view').addEventListener('pointerdown', function (e) { down = [e.clientX, e.clientY]; }, true);
+      $('view').addEventListener('pointerup', function (e) {
+        if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !sites.getVisibility()) return;
+        var api = grw.getApiSpecificRenderWindow(), cv = api.getCanvas(), r = cv.getBoundingClientRect(), k = cv.width / r.width;
+        var mx = (e.clientX - r.left) * k, my = (r.bottom - e.clientY) * k, best = null, bd = 14 * k;
+        shown.forEach(function (si) {
+          var d = api.worldToDisplay(S[si].x, S[si].y, 0.05 * ve, ren), dist = Math.hypot(d[0] - mx, d[1] - my);
+          if (dist < bd) { bd = dist; best = si; }
+        });
+        if (best != null) { siteApi.select(S[best].id); if (siteApi.onPick) siteApi.onPick(S[best].id); }
+      }, true);
     }
 
     // ── compass cube ──
@@ -322,7 +361,7 @@
       } else {
         setSlice.j(0); slices.i.actor.setVisibility(false); slices.k.actor.setVisibility(false); slices.j.actor.setVisibility(true);
       }
-      if (sites) sites.setVisibility($('on-sites').checked);
+      if (sites) { sites.setVisibility($('on-sites').checked); ringActor.setVisibility($('on-sites').checked); }
       axes.setVisibility($('on-axes').checked); oActor.setVisibility($('on-outline').checked);
       win.render();
     };
@@ -373,7 +412,7 @@
 
     // what a 2D section does not need
     ['tab-slices', 'tab-volume'].forEach(function (id) { show(id, !is2d); });
-    show('sites-tick', !!sc.sites);
+    show('sites-tick', !!sc.sites); show('sitefit-tick', !!(sc.sites && sc.fit));
     if (is2d) [].forEach.call($('views').children, function (b) { b.hidden = b.dataset.v !== 'south'; });
     if (!is2d) {
       $('k').max = nz - 1; $('i').max = nx - 1; $('j').max = ny - 1;
@@ -453,7 +492,7 @@
       fi = D.field || 0; $('field').value = fi;
       if (sc.times) { ti = num(D.time, sc.times.length - 1); $('t').value = ti; $('t-o').textContent = sc.times[ti].label; }
       $('ve').value = String(D.ve || 1);
-      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false;
+      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false; $('on-sitefit').checked = !!sh.siteFit;
       $('compass').value = D.marker || 'cube';
       [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']].forEach(function (c) { $(c[0]).value = cut[c[1]] || 0; });
       if (!is2d) {
@@ -474,7 +513,7 @@
     $('copy-settings').onclick = function () {
       var b = this, f = sc.fields[fi], on = function (id) { return $(id).checked; }, n = function (id) { return +$(id).value; };
       var out = { defaults: { field: fi, view: current || 'oblique', ve: ve, marker: $('compass').value,
-        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites') },
+        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites'), siteFit: on('on-sitefit') },
         cut: { w: n('cut-w'), e: n('cut-e'), s: n('cut-s'), n: n('cut-n'), t: n('cut-t'), b: n('cut-b') } } };
       if (sc.times) out.defaults.time = ti;
       if (!is2d) {
@@ -495,7 +534,8 @@
     extentNote();
     await applyDefaults();
     msg.remove();
-    window.__viewer = { win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
+    if (sc.fit && siteApi && window.MATEFit) window.MATEFit.init({ url: 'volumes/' + sc.fit, sites: S, api: siteApi });
+    window.__viewer = { siteApi: siteApi,  win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
       surfs: function () { return surfs; }, ve: function () { return ve; },
       state: function () { return { field: fi, time: ti, stem: stemOf(), loaded: Object.keys(cache).length, solid: solidState }; } };
   } catch (e) {

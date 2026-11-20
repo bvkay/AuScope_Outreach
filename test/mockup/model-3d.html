@@ -65,6 +65,39 @@
   .full { position: absolute; right: 12px; top: 12px; font: 600 12px var(--sans); padding: 6px 10px; border: 1px solid var(--line); border-radius: 5px; background: rgba(255,255,255,.92); color: var(--text); cursor: pointer; }
   .full:hover { border-color: var(--accent); }
 
+  /* ── model fit ── */
+  .fit { margin-top: 18px; position: relative; }
+  .fit h2 { margin: 0 0 4px; }
+  .fit .lead2 { margin: 0 0 14px; font-size: 14.5px; color: var(--muted); max-width: 62em; }
+  .fit-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .fit-stats div { border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; background: var(--surface-2); min-width: 108px; }
+  .fit-stats b { display: block; font: 600 20px/1.2 var(--sans); color: var(--heading); }
+  .fit-stats span { font-size: 12.5px; color: var(--muted); }
+  .fit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; font-size: 13.5px; margin-bottom: 10px; }
+  .fit select { font: 400 13px var(--sans); padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--text); }
+  .fit-key { display: inline-flex; align-items: center; gap: 6px; font: 400 11.5px var(--mono); color: var(--muted); }
+  .fit-key i { display: inline-block; width: 150px; height: 10px; border-radius: 2px; border: 1px solid var(--line); }
+  .fit-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+  .fit figure { margin: 0; }
+  .fit figcaption { font: 600 13px var(--sans); color: var(--text); margin-bottom: 6px; }
+  .fit figcaption small { font-weight: 400; color: var(--muted); }
+  .fit svg { width: 100%; height: auto; display: block; }
+  .fit svg text { font: 400 11px var(--sans); fill: var(--muted); }
+  .fit svg .hit { cursor: pointer; }
+  .fit-site { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .fit-site h3 { margin: 0; font-size: 16px; color: var(--heading); }
+  .fit-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; font-size: 12.5px; }
+  .fit-chips span { border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; background: var(--surface-2); }
+  .fit-chips b { font-family: var(--mono); font-weight: 600; }
+  .fit-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--text); margin-top: 6px; }
+  .fit-legend i { display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .fit-legend .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .fit-legend .ln { width: 18px; height: 2px; }
+  .fit .note { font-size: 12.5px; color: var(--muted); margin: 14px 0 0; }
+  .fit-tip { position: fixed; z-index: 50; pointer-events: none; background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: var(--shadow); padding: 5px 9px; font-size: 12.5px; line-height: 1.4; color: var(--text); white-space: nowrap; }
+  .fit-tip b { font-family: var(--mono); }
+  @media (max-width: 860px) { .fit-grid { grid-template-columns: 1fr; } }
+
   /* the record below the viewer */
   .rec img, .rec video { max-width: 100%; height: auto; border-radius: 6px; margin: 8px 0; }
   .rec p { margin: 0 0 10px; }
@@ -136,6 +169,7 @@
           <div class="line2"><label><input type="checkbox" id="on-outline" checked> Model outline</label></div>
           <div class="line2"><label><input type="checkbox" id="on-axes" checked> Axes and distances (km)</label></div>
           <div class="line2" id="sites-tick"><label><input type="checkbox" id="on-sites" checked> MT sites <span class="val" id="n-sites"></span></label></div>
+          <div class="line2" id="sitefit-tick" style="padding-left:22px"><label><input type="checkbox" id="on-sitefit"> Colour by model fit</label></div>
           <div class="line2"><span>Direction marker</span>
             <select id="compass" class="push" style="width:104px" aria-label="Direction marker"><option value="cube">Cube</option><option value="arrows">Arrows</option><option value="off">Off</option></select></div>
           <p class="help key" id="arrow-key" hidden></p>
@@ -205,7 +239,8 @@
             <option value="mt">MT rainbow (warm = low)</option>
             <option value="jet">Jet</option>
             <option value="Viridis (matplotlib)">Viridis</option>
-            <option value="Inferno (matplotlib)">Inferno</option>
+            <option value="Inferno (matplotlib)">Inferno (black – red – yellow)</option>
+            <option value="Magma (matplotlib)">Magma (black – pink – cream)</option>
             <option value="ryb">Red – yellow – blue (red = low)</option>
             <option value="Grayscale">Greyscale</option>
           </select>
@@ -237,6 +272,9 @@
       <button class="full" id="full" type="button">Full screen</button>
     </div>
   </div>
+
+  <!-- Model fit: only for inversions that carry a fit file. Filled by fit.js. -->
+  <section class="panel fit" id="fit" hidden></section>
 
   <div class="model-layout" style="margin-top:22px">
     <div>
@@ -278,6 +316,7 @@
 <script src="data.js"></script>
 <script src="mockup.js?v=4"></script>
 <script src="https://unpkg.com/vtk.js@34.16.3/vtk.js"></script>
-<script src="viewer3d.js?v=8"></script>
+<script src="fit.js?v=1"></script>
+<script src="viewer3d.js?v=9"></script>
 </body>
 </html>
