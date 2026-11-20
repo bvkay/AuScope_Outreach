@@ -140,6 +140,44 @@
     });
     var setSlice = { i: function (v) { slices.i.mapper.setISlice(v); }, j: function (v) { slices.j.mapper.setJSlice(v); }, k: function (v) { slices.k.mapper.setKSlice(v); } };
 
+    // ── walls and floor (3D): the outer faces of the box, coloured by the model. A face turned
+    //    towards the viewer is not drawn, so from any side you look into the box and see the far
+    //    walls and the floor behind whatever is inside. ──
+    var walls = null, wallPoly = null;
+    if (!is2d) {
+      wallPoly = DM.vtkPolyData.newInstance();
+      var wMapper = Core.vtkMapper.newInstance(); wMapper.setInputData(wallPoly); wMapper.setScalarModeToUsePointData(); wMapper.setColorModeToDirectScalars();
+      walls = Core.vtkActor.newInstance(); walls.setMapper(wMapper);
+      walls.getProperty().setFrontfaceCulling(true); walls.getProperty().setBackfaceCulling(false);
+      walls.getProperty().setAmbient(1); walls.getProperty().setDiffuse(0); walls.getProperty().setSpecular(0);
+      walls.setVisibility(false); ren.addActor(walls); scaled.push(walls);
+    }
+    var updateWalls = function () {
+      if (is2d || !$('on-walls').checked) return;
+      var raw = curRaw, o = image.getOrigin(), P = [], Q = [], RGB = [], c = [0, 0, 0];
+      var face = function (nu, nv, at, flip) {        // at(u, v) gives the voxel [i, j, k] within the box on show
+        var base = P.length / 3, u, v;
+        for (v = 0; v < nv; v++) for (u = 0; u < nu; u++) {
+          var q = at(u, v), r = raw[cr.i0 + q[0] + nx * (cr.j0 + q[1] + ny * (cr.k0 + q[2]))];
+          P.push(o[0] + q[0] * sp[0], o[1] + q[1] * sp[1], o[2] + q[2] * sp[2]);
+          if (r) { ctf.getColor(r, c); RGB.push(c[0] * 255, c[1] * 255, c[2] * 255); } else RGB.push(255, 255, 255);   // no value: white
+        }
+        for (v = 0; v < nv - 1; v++) for (u = 0; u < nu - 1; u++) {
+          var a = base + u + nu * v, b = a + 1, d = a + nu, e = d + 1;
+          if (flip) Q.push(4, a, d, e, b); else Q.push(4, a, b, e, d);      // wound so each face looks outward
+        }
+      };
+      face(cy, cz, function (u, v) { return [0, u, v]; }, true);            // west
+      face(cy, cz, function (u, v) { return [cx - 1, u, v]; }, false);      // east
+      face(cx, cz, function (u, v) { return [u, 0, v]; }, false);           // south
+      face(cx, cz, function (u, v) { return [u, cy - 1, v]; }, true);       // north
+      face(cx, cy, function (u, v) { return [u, v, 0]; }, true);            // floor
+      face(cx, cy, function (u, v) { return [u, v, cz - 1]; }, false);      // top
+      wallPoly.getPoints().setData(Float32Array.from(P), 3); wallPoly.getPolys().setData(Uint32Array.from(Q));
+      wallPoly.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'rgb', numberOfComponents: 3, values: Uint8Array.from(RGB) }));
+      wallPoly.modified();
+    };
+
     // ── solid body (3D): everything between a minimum and a maximum, closed off where it meets
     //    the edge of the model. Built on a copy of the volume with one extra voxel all round that
     //    counts as "outside", so the surface is capped at the box instead of left open. ──
@@ -164,6 +202,7 @@
     var solidState = { ok: false, text: '' };
     var updateSolid = function () {
       if (is2d) return;
+      updateWalls();          // same moments: new data, new colours, new extent
       var useMin = $('s-min-on').checked, useMax = $('s-max-on').checked, vmin = +$('s-min').value, vmax = +$('s-max').value;
       var bad = (useMin && ($('s-min').value === '' || !physOk(vmin))) || (useMax && ($('s-max').value === '' || !physOk(vmax))) || (useMin && useMax && !(vmin < vmax));
       $('s-err').textContent = bad ? (useMin && useMax ? 'Minimum must be below maximum.' : 'Enter a valid value.') : '';
@@ -327,9 +366,12 @@
     // ── set views ──
     var VIEWS = { oblique: [[-1, -1.5, 0.9], [0, 0, 1]], above: [[0, 0, 1], [0, 1, 0]], south: [[0, -1, 0], [0, 0, 1]], north: [[0, 1, 0], [0, 0, 1]], east: [[1, 0, 0], [0, 0, 1]], west: [[-1, 0, 0], [0, 0, 1]] };
     var current = null;
-    var view = function (n) {
-      var v = VIEWS[n], cz = C[2] * ve; current = n;
-      cam.setFocalPoint(C[0], C[1], cz); cam.setPosition(C[0] + v[0][0], C[1] + v[0][1], cz + v[0][2]); cam.setViewUp(v[1][0], v[1][1], v[1][2]);
+    var tilt = 0;               // degrees above level for the four side views; set by a model's defaults
+    var view = function (n, keepTilt) {
+      var v = VIEWS[n], cz = C[2] * ve, p = v[0]; current = n;
+      if (!keepTilt) tilt = 0;
+      if (tilt && p[2] === 0) { var t = tilt * Math.PI / 180; p = [p[0] * Math.cos(t), p[1] * Math.cos(t), Math.sin(t)]; }
+      cam.setFocalPoint(C[0], C[1], cz); cam.setPosition(C[0] + p[0], C[1] + p[1], cz + p[2]); cam.setViewUp(v[1][0], v[1][1], v[1][2]);
       ren.resetCamera(); if (is2d) cam.zoom(1.2); ren.resetCameraClippingRange(); compass.updateMarkerOrientation(); win.render();
       [].forEach.call($('views').children, function (b) { b.setAttribute('aria-pressed', b.dataset.v === n); });
     };
@@ -363,6 +405,7 @@
       }
       if (sites) { sites.setVisibility($('on-sites').checked); ringActor.setVisibility($('on-sites').checked); }
       axes.setVisibility($('on-axes').checked); oActor.setVisibility($('on-outline').checked);
+      if (walls) walls.setVisibility($('on-walls').checked);
       win.render();
     };
     var rescale = function () { if (applyScale()) { updateSolid(); updateSurfs(); setVE(ve); sync(); } };
@@ -412,7 +455,8 @@
 
     // what a 2D section does not need
     ['tab-slices', 'tab-volume'].forEach(function (id) { show(id, !is2d); });
-    show('sites-tick', !!sc.sites); show('sitefit-tick', !!(sc.sites && sc.fit));
+    show('sites-tick', !!sc.sites); show('sitefit-tick', !!(sc.sites && sc.fit)); show('walls-tick', !is2d);
+    $('on-walls').addEventListener('input', function () { updateWalls(); sync(); });
     if (is2d) [].forEach.call($('views').children, function (b) { b.hidden = b.dataset.v !== 'south'; });
     if (!is2d) {
       $('k').max = nz - 1; $('i').max = nx - 1; $('j').max = ny - 1;
@@ -451,7 +495,7 @@
       setData(curRaw); if (!is2d) sizePad();
       if (sites) placeSites();
       updateSolid(); updateSurfs(); setVE(ve); extentNote(); sync();
-      if (current) view(current); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); }
+      if (current) view(current, true); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); }
     };
     CUTS.forEach(function (c) { $(c[0]).addEventListener('change', applyCut); });
     $('cut-reset').onclick = function () { CUTS.forEach(function (c) { $(c[0]).value = 0; }); applyCut(); };
@@ -481,7 +525,7 @@
     //    the same settings, so its author can point at different things in the same model.
     var D = sc.defaults || {};
     var num = function (v, fallback) { return v != null ? v : fallback; };
-    var VIEWSETS = [{ name: 'Opening view', defaults: sc.defaults || {}, field: null }].concat(sc.views || []);
+    var VIEWSETS = [{ name: sc.defaultsName || 'Opening view', defaults: sc.defaults || {}, field: null }].concat(sc.views || []);
     $('preset').innerHTML = VIEWSETS.map(function (p, i) { return '<option value="' + i + '">' + p.name + '</option>'; }).join('');
     show('preset-row', VIEWSETS.length > 1);
     $('preset').addEventListener('change', function () { applyDefaults(); });
@@ -492,7 +536,7 @@
       fi = D.field || 0; $('field').value = fi;
       if (sc.times) { ti = num(D.time, sc.times.length - 1); $('t').value = ti; $('t-o').textContent = sc.times[ti].label; }
       $('ve').value = String(D.ve || 1);
-      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false; $('on-sitefit').checked = !!sh.siteFit;
+      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false; $('on-sitefit').checked = !!sh.siteFit; $('on-walls').checked = !!sh.walls;
       $('compass').value = D.marker || 'cube';
       [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']].forEach(function (c) { $(c[0]).value = cut[c[1]] || 0; });
       if (!is2d) {
@@ -505,7 +549,8 @@
       }
       await swap(false);                    // the field's own scale, solid and surfaces
       setVE(+$('ve').value); setCompass(); applyCut();
-      view(!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique'));
+      tilt = +D.tilt || 0; cam.setViewAngle(+D.viewAngle || 30);
+      view(!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique'), true);
     };
     $('to-defaults').onclick = function () { $('preset').value = 0; applyDefaults(); };
 
@@ -513,7 +558,7 @@
     $('copy-settings').onclick = function () {
       var b = this, f = sc.fields[fi], on = function (id) { return $(id).checked; }, n = function (id) { return +$(id).value; };
       var out = { defaults: { field: fi, view: current || 'oblique', ve: ve, marker: $('compass').value,
-        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites'), siteFit: on('on-sitefit') },
+        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites'), siteFit: on('on-sitefit'), walls: on('on-walls') },
         cut: { w: n('cut-w'), e: n('cut-e'), s: n('cut-s'), n: n('cut-n'), t: n('cut-t'), b: n('cut-b') } } };
       if (sc.times) out.defaults.time = ti;
       if (!is2d) {
@@ -535,7 +580,7 @@
     await applyDefaults();
     msg.remove();
     if (sc.fit && siteApi && window.MATEFit) window.MATEFit.init({ url: 'volumes/' + sc.fit, sites: S, api: siteApi });
-    window.__viewer = { siteApi: siteApi,  win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
+    window.__viewer = { siteApi: siteApi, walls: walls, wallPoly: wallPoly,  win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
       surfs: function () { return surfs; }, ve: function () { return ve; },
       state: function () { return { field: fi, time: ti, stem: stemOf(), loaded: Object.keys(cache).length, solid: solidState }; } };
   } catch (e) {

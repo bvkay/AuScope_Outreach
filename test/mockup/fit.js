@@ -239,7 +239,7 @@ window.MATEFit = (function () {
     $('fit-pair').addEventListener('change', function () { pair = this.value; drawCurves(); });
     o.api.onPick = function (id) { choose(id, false); open(true); };
 
-    paint(); choose(chosen, true);
+    paint(); choose(chosen, false);      // nothing is marked in the 3D view until a site is picked
     window.__fit = { data: F, choose: choose, open: open, state: function () { return { chosen: chosen, measure: measure, pair: pair }; }, rmsRGB: rmsRGB, curve: function (id, c, k, obs) { return curve(F.sites[id][obs ? 'obs' : 'prd'][c], freqs[k], k, c === 'zyx', obs); } };
   }
 

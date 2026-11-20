@@ -17,91 +17,122 @@
     "label": "Resistivity",
     "unit": "Ω·m",
     "stem": "vulcan-2022-model1",
-    "vmin": 5,
+    "vmin": 1,
     "vmax": 1000,
-    "cmap": "mt",
+    "cmap": "ryb",
     "solid": {
-     "max": 20
+     "max": 10
     },
     "surfaces": [
-     100
+     20,
+     50
     ]
    }
   ],
   "defaults": {
-   "view": "oblique",
+   "view": "south",
+   "tilt": 22,
+   "viewAngle": 60,
    "ve": 1,
    "marker": "cube",
-   "slices": {
-    "depth_km": 2.7,
-    "y_km": 8.7,
-    "showDepth": true,
-    "showX": false,
-    "showY": true
+   "show": {
+    "walls": true,
+    "outline": true,
+    "axes": true,
+    "sites": true
    },
+   "slices": {
+    "showDepth": false,
+    "showX": false,
+    "showY": false
+   },
+   "showSolid": true,
    "solidOpacity": 100,
-   "surfaceOpacity": 40
+   "surfaceOpacity": 35
   },
   "views": [
    {
-    "name": "Shallow conductor under cover",
+    "name": "From the east",
     "defaults": {
-     "view": "oblique",
-     "ve": 2,
-     "cut": {
-      "b": 14
-     },
-     "slices": {
-      "depth_km": 1.5,
-      "y_km": 8.7,
-      "showDepth": true,
-      "showY": true
-     },
+     "view": "east",
+     "tilt": 22,
+     "viewAngle": 60,
+     "ve": 1,
+     "marker": "cube",
      "show": {
+      "walls": true,
+      "outline": true,
+      "axes": true,
       "sites": true
      },
-     "surfaceOpacity": 40
+     "slices": {
+      "showDepth": false,
+      "showX": false,
+      "showY": false
+     },
+     "showSolid": true,
+     "solidOpacity": 100,
+     "surfaceOpacity": 35
+    },
+    "field": null
+   },
+   {
+    "name": "10 Ω·m body only, from the south",
+    "defaults": {
+     "view": "south",
+     "tilt": 22,
+     "viewAngle": 60,
+     "ve": 1,
+     "marker": "cube",
+     "show": {
+      "walls": true,
+      "outline": true,
+      "axes": true,
+      "sites": true
+     },
+     "slices": {
+      "showDepth": false,
+      "showX": false,
+      "showY": false
+     },
+     "showSolid": true,
+     "solidOpacity": 100,
+     "surfaceOpacity": 35
     },
     "field": {
-     "vmin": 5,
-     "vmax": 300,
-     "cmap": "ryb",
-     "solid": {
-      "max": 20
-     },
      "surfaces": []
     }
    },
    {
-    "name": "Deep conductor, section from the south",
+    "name": "10 Ω·m body only, from the east",
     "defaults": {
-     "view": "south",
+     "view": "east",
+     "tilt": 22,
+     "viewAngle": 60,
      "ve": 1,
-     "cut": {
-      "s": 8.7
+     "marker": "cube",
+     "show": {
+      "walls": true,
+      "outline": true,
+      "axes": true,
+      "sites": true
      },
      "slices": {
       "showDepth": false,
-      "showY": false,
-      "showX": false
+      "showX": false,
+      "showY": false
      },
-     "show": {
-      "sites": false
-     },
-     "solidOpacity": 100
+     "showSolid": true,
+     "solidOpacity": 100,
+     "surfaceOpacity": 35
     },
     "field": {
-     "vmin": 5,
-     "vmax": 1000,
-     "cmap": "ryb",
-     "solid": {
-      "max": 60
-     },
      "surfaces": []
     }
    }
   ],
-  "fit": "vulcan-2022-fit.json"
+  "fit": "vulcan-2022-fit.json",
+  "defaultsName": "From the south"
  },
  "sunda": {
   "slug": "gollapalli-2025-sundamegathrust",
