@@ -4,23 +4,15 @@
   var v = document.body.dataset.variant || (location.search.match(/[?&]v=([1-5])/) || [])[1] || '1';
   var M = (window.MODELS || []).slice();
   var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
-  var FOOTERS = { band: 'Logo band + strip', row: 'Single row', fixed: 'Fixed strip', float: 'Floating logos', floatbare: 'Floating logos, no box', fixedfloat: 'Fixed line + floating logos', fixedfloatbare: 'Fixed line + floating logos, no box' };
-  var DEFAULT_F = { 1: 'fixedfloat', 2: 'fixedfloat', 3: 'fixedfloat', 4: 'fixedfloat', 5: 'fixedfloat' };   // the footer chosen 20 Nov 2026; the others stay in the switcher for comparison
   var dark = document.body.classList.contains('dark');   // mockup 5 only: white logos on a dark page
-  var fq = (location.search.match(/[?&]f=(band|row|fixedfloatbare|fixedfloat|fixed|floatbare|float)/) || [])[1];
-  var f = fq || DEFAULT_F[v];
-  var keep = fq ? '?f=' + fq : '';                       // carry an overridden footer between pages
-  var page = location.pathname.split('/').pop() || 'mockup-1.html';
+  var f = 'fixedfloat';      // one footer: a line pinned to the bottom of the window, logos floating above it
   // mockup 5 is the 3D model viewer itself; the others are home-page layouts
-  var pageOf = function (n) { return String(n) === '5' ? 'model-3d.html?scene=vulcan&v=5' + keep.replace('?', '&') : 'mockup-' + n + '.html' + keep; };
+  var pageOf = function (n) { return String(n) === '5' ? 'model-3d.html?scene=vulcan&v=5' : 'mockup-' + n + '.html'; };
   var home = pageOf(v);
 
   var NAMES = { 1: 'Featured + grid', 2: 'Scrolling strip + list', 3: 'Filter sidebar', 4: 'Filter sidebar + grid', 5: '3D model viewer' };
   var switcher = '<div class="switcher"><span>Mockup</span>' + [1, 2, 3, 4, 5].map(function (n) {
     return '<a href="' + pageOf(n) + '"' + (String(n) === v ? ' aria-current="true"' : '') + '>' + n + ' · ' + NAMES[n] + '</a>';
-  }).join('') + '<span class="sep">Footer</span>' + Object.keys(FOOTERS).map(function (k) {
-    var q = location.search.replace(/[?&]f=\w+/, '').replace(/^&/, '?');
-    return '<a href="' + page + q + (q ? '&' : '?') + 'f=' + k + '"' + (k === f ? ' aria-current="true"' : '') + '>' + FOOTERS[k] + '</a>';
   }).join('') + '<span class="note">review aid, not part of the design</span>' +
     '<span class="warn">Design mockup for discussion. This is not the M@TE website; the real one is at <a href="https://mate.science/">mate.science</a>.</span></div>';
 
@@ -32,7 +24,7 @@
     '<nav class="nav" aria-label="Main">' +
       [['Models', home, ''], ['News', 'news.html', 'news'], ['About', 'about.html', 'about'], ['Team', 'team.html', 'team']].map(function (n) {
         var here = (document.body.dataset.page || '') === n[2];
-        var href = n[2] ? n[1] + '?v=' + v + (fq ? '&f=' + fq : '') : n[1];
+        var href = n[2] ? n[1] + '?v=' + v : n[1];
         return '<a href="' + href + '"' + (here ? ' aria-current="page"' : '') + '>' + n[0] + '</a>';
       }).join('') +
       '<a class="plain" href="https://github.com/ModelAtlasofTheEarth/model-submission/issues/new?template=model_submission.yml">Submit a model</a>' +
@@ -50,22 +42,7 @@
     return '<footer class="site-footer ' + cls + '"><div class="fzone fleft">' + left + '</div>' +
       '<div class="fzone fcenter">' + credit + '</div><div class="fzone fright">' + right + '</div></footer>';
   };
-  var footer = {
-    // logos in their own band, then the slim AusMT strip, both at the end of the page
-    band: function () { return '<div class="supporters">' + logos() + '</div>' + strip('', gh, count); },
-    // one row at the end of the page: logos left, credit centre, links right
-    row: function () { return strip('f-row', '<span class="flogos">' + logos() + '</span>', gh + ' · ' + count); },
-    // strip pinned to the bottom of the window, as in the AusMT app, with small logos at the right
-    fixed: function () { return strip('f-fixed', gh + ' · ' + count, '<span class="flogos">' + logos() + '</span>'); },
-    // strip at the end of the page, logos floating bottom-right of the window (AusMT's map corner)
-    float: function () { return strip('', gh + ' · ' + count, '') + '<div class="float-logos">' + logos() + '</div>'; },
-    // as above, but the logos sit straight on the page with no card behind them
-    floatbare: function () { return strip('', gh + ' · ' + count, '') + '<div class="float-logos bare">' + logos() + '</div>'; },
-    // one line pinned to the bottom of the window, logos floating just above it at the right
-    fixedfloat: function () { return strip('f-fixed', gh, count) + '<div class="float-logos">' + logos() + '</div>'; },
-    // the same, with no card behind the logos
-    fixedfloatbare: function () { return strip('f-fixed', gh, count) + '<div class="float-logos bare">' + logos() + '</div>'; }
-  }[f]();
+  var footer = strip('f-fixed', gh, count) + '<div class="float-logos">' + logos() + '</div>';
   document.body.classList.add('foot-' + f);
 
   document.body.insertAdjacentHTML('afterbegin', switcher + header);
@@ -81,7 +58,7 @@
   window.MATE = {
     models: M, esc: esc, topics: topics, nPeople: Object.keys(people).length,
     href: function (m) { var scene = { 'Kay-2024-Vulcan': 'vulcan', 'gollapalli-2025-sundamegathrust': 'sunda', 'sandiford-2021-detachment': 'detachment' }[m.slug];
-      return (scene ? 'model-3d.html?scene=' + scene + '&v=' : 'model.html?v=') + v + (fq ? '&f=' + fq : '') + '&m=' + encodeURIComponent(m.slug); },
+      return (scene ? 'model-3d.html?scene=' + scene + '&v=' : 'model.html?v=') + v + '&m=' + encodeURIComponent(m.slug); },
     who: function (m) { var c = m.creators; return c.length > 2 ? c[0] + ' et al.' : c.join(' & '); },
     byline: function (m) { return '<p class="byline"><b>' + esc(this.who(m)) + '</b>' + (m.year ? ' · ' + m.year : '') + '</p>'; },
     tags: function (m, n) {
