@@ -223,6 +223,7 @@
           <div class="line2"><label><input type="checkbox" id="on-solid" checked> <b>Solid body</b></label><output id="s-o" class="push"></output></div>
           <div class="line2"><label><input type="checkbox" id="s-min-on"> From</label><span class="push"><input class="num" id="s-min" inputmode="decimal" aria-label="Solid body minimum"> <span class="unit val"></span></span></div>
           <div class="line2"><label><input type="checkbox" id="s-max-on"> Up to</label><span class="push"><input class="num" id="s-max" inputmode="decimal" aria-label="Solid body maximum"> <span class="unit val"></span></span></div>
+          <div class="line2"><span>Only deeper than</span><span class="push"><input type="number" class="num pc" id="s-below" min="0" step="any" value="0" aria-label="Draw the solid body only below this depth, kilometres"> km</span></div>
           <div class="line2"><span>Opacity</span><span class="push"><input type="number" class="num pc" id="s-op" min="10" max="100" step="10" value="100" aria-label="Solid body opacity, percent"> %</span></div>
           <span class="err" id="s-err" role="alert"></span>
           <p class="help">Everything in the range, closed off at the edge of the model.</p>
@@ -322,6 +323,6 @@
 <script src="mockup.js?v=4"></script>
 <script src="https://unpkg.com/vtk.js@34.16.3/vtk.js"></script>
 <script src="fit.js?v=3"></script>
-<script src="viewer3d.js?v=11"></script>
+<script src="viewer3d.js?v=13"></script>
 </body>
 </html>

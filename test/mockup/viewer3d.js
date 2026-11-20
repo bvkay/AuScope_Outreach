@@ -211,7 +211,9 @@
       var a = useMin ? toRaw(toStored(vmin)) : -Infinity, b = useMax ? toRaw(toStored(vmax)) : Infinity;
       var raw = cache[stemOf()].raw, gap = cache[stemOf()].gap, OUT = -1e9, inside = 0;
       pad.fill(OUT);
+      var below = Math.max(0, +$('s-below').value || 0);      // km: the body is only drawn deeper than this
       for (var z = 0; z < cz; z++) for (var y = 0; y < cy; y++) {
+        if ((nz - 1 - (cr.k0 + z)) * sp[2] < below) continue;
         var src = cr.i0 + nx * (y + cr.j0 + ny * (z + cr.k0)), dst = 1 + px * (y + 1 + py * (z + 1));
         for (var x = 0; x < cx; x++) {
           var v = raw[src + x];
@@ -423,6 +425,7 @@
         var s = f.solid || {};
         $('s-min-on').checked = s.min != null; $('s-max-on').checked = s.max != null;
         $('s-min').value = fmt(s.min != null ? s.min : toPhys(lo + 0.25 * (hi - lo))); $('s-max').value = fmt(s.max != null ? s.max : toPhys(lo + 0.75 * (hi - lo)));
+        $('s-below').value = s.below_km || 0;
         $('surf').value = (f.surfaces || []).join(', ');
       }
     };
@@ -465,7 +468,7 @@
 
     ['k', 'i', 'j', 'on-k', 'on-i', 'on-j', 'op-k', 'op-i', 'op-j', 'on-solid', 's-op', 'surf-op', 'on-sites', 'on-axes', 'on-outline'].forEach(function (id) { $(id).addEventListener('input', sync); });
     ['cmap', 'rev', 'vmin', 'vmax'].forEach(function (id) { $(id).addEventListener('change', rescale); });
-    ['s-min-on', 's-max-on', 's-min', 's-max'].forEach(function (id) { $(id).addEventListener('change', function () { updateSolid(); sync(); }); });
+    ['s-min-on', 's-max-on', 's-min', 's-max', 's-below'].forEach(function (id) { $(id).addEventListener('change', function () { updateSolid(); sync(); }); });
     $('surf').addEventListener('change', function () { updateSurfs(); setVE(ve); sync(); });
     $('ve').addEventListener('change', function () { setVE(+this.value); if (current) view(current); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); } });
     $('vreset').onclick = function () { fieldOver = null; useField(false); rescale(); };
@@ -550,7 +553,9 @@
       await swap(false);                    // the field's own scale, solid and surfaces
       setVE(+$('ve').value); setCompass(); applyCut();
       tilt = +D.tilt || 0; cam.setViewAngle(+D.viewAngle || 30);
-      view(!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique'), true);
+      // "from" is a direction of the model's own choosing: [east, north, up] towards the viewer
+      if (!is2d && D.from) VIEWS.custom = [D.from, [0, 0, 1]];
+      view(!is2d && D.from ? 'custom' : (!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique')), true);
     };
     $('to-defaults').onclick = function () { $('preset').value = 0; applyDefaults(); };
 
@@ -568,7 +573,7 @@
       }
       out.field = { label: f.label, vmin: n('vmin'), vmax: n('vmax'), cmap: $('cmap').value, reverse: on('rev') };
       if (!is2d) {
-        out.field.solid = {}; if (on('s-min-on')) out.field.solid.min = n('s-min'); if (on('s-max-on')) out.field.solid.max = n('s-max');
+        out.field.solid = {}; if (on('s-min-on')) out.field.solid.min = n('s-min'); if (on('s-max-on')) out.field.solid.max = n('s-max'); if (n('s-below') > 0) out.field.solid.below_km = n('s-below');
         out.field.surfaces = $('surf').value.split(/[,;\s]+/).filter(Boolean).map(Number);
       }
       window.__lastSettings = out;

@@ -21,25 +21,28 @@
     "vmax": 1000,
     "cmap": "ryb",
     "solid": {
-     "max": 10
+     "max": 30,
+     "below_km": 1
     },
     "surfaces": [
-     20,
-     50
+     100
     ]
    }
   ],
   "defaults": {
-   "view": "south",
-   "tilt": 22,
-   "viewAngle": 60,
+   "from": [
+    1,
+    -1,
+    1.1
+   ],
+   "viewAngle": 30,
    "ve": 1,
    "marker": "cube",
    "show": {
     "walls": true,
     "outline": true,
     "axes": true,
-    "sites": true
+    "sites": false
    },
    "slices": {
     "showDepth": false,
@@ -48,22 +51,20 @@
    },
    "showSolid": true,
    "solidOpacity": 100,
-   "surfaceOpacity": 35
+   "surfaceOpacity": 40
   },
   "views": [
    {
-    "name": "From the east",
+    "name": "From above",
     "defaults": {
-     "view": "east",
-     "tilt": 22,
-     "viewAngle": 60,
+     "viewAngle": 30,
      "ve": 1,
      "marker": "cube",
      "show": {
       "walls": true,
       "outline": true,
       "axes": true,
-      "sites": true
+      "sites": false
      },
      "slices": {
       "showDepth": false,
@@ -72,23 +73,22 @@
      },
      "showSolid": true,
      "solidOpacity": 100,
-     "surfaceOpacity": 35
+     "surfaceOpacity": 40,
+     "view": "above"
     },
     "field": null
    },
    {
-    "name": "10 Ω·m body only, from the south",
+    "name": "From the south",
     "defaults": {
-     "view": "south",
-     "tilt": 22,
-     "viewAngle": 60,
+     "viewAngle": 45,
      "ve": 1,
      "marker": "cube",
      "show": {
       "walls": true,
       "outline": true,
       "axes": true,
-      "sites": true
+      "sites": false
      },
      "slices": {
       "showDepth": false,
@@ -97,25 +97,23 @@
      },
      "showSolid": true,
      "solidOpacity": 100,
-     "surfaceOpacity": 35
+     "surfaceOpacity": 40,
+     "view": "south",
+     "tilt": 12
     },
-    "field": {
-     "surfaces": []
-    }
+    "field": null
    },
    {
-    "name": "10 Ω·m body only, from the east",
+    "name": "From the east",
     "defaults": {
-     "view": "east",
-     "tilt": 22,
-     "viewAngle": 60,
+     "viewAngle": 45,
      "ve": 1,
      "marker": "cube",
      "show": {
       "walls": true,
       "outline": true,
       "axes": true,
-      "sites": true
+      "sites": false
      },
      "slices": {
       "showDepth": false,
@@ -124,15 +122,46 @@
      },
      "showSolid": true,
      "solidOpacity": 100,
-     "surfaceOpacity": 35
+     "surfaceOpacity": 40,
+     "view": "east",
+     "tilt": 12
     },
-    "field": {
-     "surfaces": []
-    }
+    "field": null
+   },
+   {
+    "name": "Top 5 km, as in the 2024 paper",
+    "defaults": {
+     "from": [
+      1,
+      -1,
+      1.1
+     ],
+     "viewAngle": 30,
+     "ve": 1,
+     "marker": "cube",
+     "show": {
+      "walls": true,
+      "outline": true,
+      "axes": true,
+      "sites": false
+     },
+     "slices": {
+      "showDepth": false,
+      "showX": false,
+      "showY": false
+     },
+     "showSolid": true,
+     "solidOpacity": 100,
+     "surfaceOpacity": 40,
+     "cut": {
+      "b": 15.4
+     }
+    },
+    "field": null
    }
   ],
   "fit": "vulcan-2022-fit.json",
-  "defaultsName": "From the south"
+  "defaultsName": "Cut-away from the south-east"
  },
  "sunda": {
   "slug": "gollapalli-2025-sundamegathrust",
