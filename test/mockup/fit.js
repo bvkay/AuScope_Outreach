@@ -26,7 +26,8 @@ window.MATEFit = (function () {
     return MID.map(function (m, i) { return Math.round(m + (end[i] - m) * a); });
   };
   var css = function (c) { return 'rgb(' + c.join(',') + ')'; };
-  var SERIES = ['#3F88C8', '#CE348A'];           // first and second component on the curves
+  // MT convention: xy as red circles, yx as blue squares (xx and yy follow the same pairing)
+  var SERIES = ['#EA1E31', '#3F88C8'];
   var MEASURES = [['total', 'All components'], ['zxy', 'Zxy'], ['zyx', 'Zyx'], ['zxx', 'Zxx'], ['zyy', 'Zyy']];
   var NAME = { zxx: 'Zxx', zxy: 'Zxy', zyx: 'Zyx', zyy: 'Zyy' };
 
@@ -55,14 +56,13 @@ window.MATEFit = (function () {
     var label = function (id) { return F.sites[id].label || id; };
     var freqs = F.freqs_hz, nf = freqs.length, fl = F.error_floors_percent;
     var chosen = ids[0], measure = 'total', pair = 'off';
-    var worst = ids.slice().sort(function (a, b) { return F.sites[b].rms.total - F.sites[a].rms.total; })[0];
     var totals = ids.map(function (id) { return F.sites[id].rms.total; }).sort(function (a, b) { return a - b; });
     var floorText = (fl.zxy === fl.zyx ? 'Zxy, Zyx ' + fl.zxy + ' %' : 'Zxy ' + fl.zxy + ' %, Zyx ' + fl.zyx + ' %') + ' · ' +
       (fl.zxx === fl.zyy ? 'Zxx, Zyy ' + fl.zxx + ' %' : 'Zxx ' + fl.zxx + ' %, Zyy ' + fl.zyy + ' %');
 
     box.innerHTML =
-      '<h2>Model fit</h2>' +
-      '<p class="lead2">How closely the response predicted by the model matches the measured data. An RMS of 1 means the misfit is the same size as the data errors; above 1 is a looser fit, below 1 a closer one.</p>' +
+      '<div class="fit-head"><h2>Model fit</h2>' +
+        '<button class="btn ghost" id="fit-toggle" type="button" aria-expanded="false" aria-controls="fit-body">Show sites and curves</button></div>' +
       '<div class="fit-stats">' +
         '<div><b>' + num(F.nrms_final) + '</b><span>overall RMS</span></div>' +
         '<div><b>' + F.iterations + '</b><span>iterations</span></div>' +
@@ -71,6 +71,7 @@ window.MATEFit = (function () {
         '<div><b>' + num(totals[0]) + ' – ' + num(totals[totals.length - 1]) + '</b><span>RMS range across sites</span></div>' +
         '<div><b style="font-size:14px;line-height:1.7">' + esc(floorText) + '</b><span>error floors</span></div>' +
       '</div>' +
+      '<div id="fit-body" hidden>' +
       '<div class="fit-bar"><label>Colour sites by RMS of <select id="fit-measure" aria-label="Colour sites by">' +
         MEASURES.map(function (m) { return '<option value="' + m[0] + '">' + m[1] + '</option>'; }).join('') + '</select></label>' +
         '<span class="fit-key">0.5<i style="background:linear-gradient(90deg,' + css(LOW) + ',' + css(MID) + ',' + css(HIGH) + ')"></i>2 &nbsp;(grey = 1)</span></div>' +
@@ -81,8 +82,7 @@ window.MATEFit = (function () {
       '<div class="fit-site">' +
         '<div class="fit-bar" style="margin-bottom:0"><h3 id="fit-title"></h3>' +
           '<label>Site <select id="fit-pick" aria-label="Site">' + ids.map(function (id) { return '<option value="' + esc(id) + '">' + esc(label(id)) + '</option>'; }).join('') + '</select></label>' +
-          '<label>Show <select id="fit-pair" aria-label="Components"><option value="off">Zxy and Zyx</option><option value="diag">Zxx and Zyy</option></select></label>' +
-          '<button class="btn ghost" id="fit-worst" type="button" style="padding:5px 12px;font-size:12.5px">Go to the worst-fitted site</button></div>' +
+          '<label>Show <select id="fit-pair" aria-label="Components"><option value="off">Zxy and Zyx</option><option value="diag">Zxx and Zyy</option></select></label></div>' +
         '<div class="fit-chips" id="fit-chips"></div>' +
         '<div class="fit-grid">' +
           '<figure><figcaption>Apparent resistivity <small>· Ω·m</small></figcaption><svg id="fit-rho" role="img" aria-label="Observed and predicted apparent resistivity"></svg></figure>' +
@@ -90,11 +90,14 @@ window.MATEFit = (function () {
         '</div>' +
         '<div class="fit-legend" id="fit-legend"></div>' +
       '</div>' +
-      '<p class="note">RMS depends on the error floors chosen for a run, so it describes this model and should not be used to rank models against each other. ' +
-        'Totals and the site-and-period values are the inversion code\'s own (' + esc(F.code) + '); the values for single components were worked out from the same observed and predicted files. ' +
-        'Curves are in the impedance axes used by the inversion (rotation ' + num(F.rotation_deg, 0) + '°). ' +
-        '<a href="' + esc(o.url) + '" download>Download the fit data (JSON)</a></p>';
+      '<p class="note"><a href="' + esc(o.url) + '" download>Download the fit data (JSON)</a></p>' +
+      '</div>';
     box.hidden = false;
+    $('fit-toggle').addEventListener('click', function () { open(this.getAttribute('aria-expanded') !== 'true'); });
+    var open = function (on) {
+      $('fit-body').hidden = !on; $('fit-toggle').setAttribute('aria-expanded', on ? 'true' : 'false');
+      $('fit-toggle').textContent = on ? 'Hide sites and curves' : 'Show sites and curves';
+    };
 
     // ── sites from above ──
     var map = $('fit-map'), xs = ids.map(function (id) { return pos[id].x; }), ys = ids.map(function (id) { return pos[id].y; });
@@ -172,7 +175,7 @@ window.MATEFit = (function () {
     var drawCurves = function () {
       var s = F.sites[chosen], comps = pair === 'off' ? ['zxy', 'zyx'] : ['zxx', 'zyy'];
       var data = comps.map(function (c, n) {
-        return { c: c, col: SERIES[n],
+        return { c: c, n: n, col: SERIES[n],
           obs: freqs.map(function (f, k) { return curve(s.obs[c], f, k, n === 1, true); }),
           prd: freqs.map(function (f, k) { return curve(s.prd[c], f, k, n === 1, false); }) };
       });
@@ -199,7 +202,8 @@ window.MATEFit = (function () {
             if (!p) return;
             var x = X(logT[k]), y = Y(clamp(val(p))), b = bar(p);
             if (b) el('line', { x1: x, x2: x, y1: Y(clamp(b[0])), y2: Y(clamp(b[1])), stroke: d.col, 'stroke-width': 1.2 }, svg);
-            el('circle', { cx: x, cy: y, r: 4, fill: d.col, stroke: '#fff', 'stroke-width': 1.5 }, svg);
+            if (d.n === 0) el('circle', { cx: x, cy: y, r: 4, fill: d.col, stroke: '#fff', 'stroke-width': 1.5 }, svg);
+            else el('rect', { x: x - 3.6, y: y - 3.6, width: 7.2, height: 7.2, fill: d.col, stroke: '#fff', 'stroke-width': 1.5 }, svg);
             var hit = el('circle', { cx: x, cy: y, r: 10, fill: 'transparent' }, svg);
             hover(hit, NAME[d.c] + ' · ' + period(freqs[k]) + '<br>observed <b>' + say(p) + '</b><br>predicted <b>' + (d.prd[k] ? say(d.prd[k]) : '–') + '</b>');
           });
@@ -207,7 +211,7 @@ window.MATEFit = (function () {
       });
 
       $('fit-legend').innerHTML = comps.map(function (c, n) {
-        return '<span><i class="dot" style="background:' + SERIES[n] + '"></i>' + NAME[c] + ' observed, with error</span>' +
+        return '<span><i class="dot' + (n ? ' sq' : '') + '" style="background:' + SERIES[n] + '"></i>' + NAME[c] + ' observed, with error</span>' +
                '<span><i class="ln" style="background:' + SERIES[n] + '"></i>' + NAME[c] + ' predicted</span>';
       }).join('');
       $('fit-title').textContent = 'Site ' + label(chosen);
@@ -233,11 +237,10 @@ window.MATEFit = (function () {
     $('fit-measure').addEventListener('change', function () { measure = this.value; paint(); });
     $('fit-pick').addEventListener('change', function () { choose(this.value, true); });
     $('fit-pair').addEventListener('change', function () { pair = this.value; drawCurves(); });
-    $('fit-worst').addEventListener('click', function () { choose(worst, true); });
-    o.api.onPick = function (id) { choose(id, false); };
+    o.api.onPick = function (id) { choose(id, false); open(true); };
 
     paint(); choose(chosen, true);
-    window.__fit = { data: F, choose: choose, state: function () { return { chosen: chosen, measure: measure, pair: pair }; }, rmsRGB: rmsRGB, curve: function (id, c, k, obs) { return curve(F.sites[id][obs ? 'obs' : 'prd'][c], freqs[k], k, c === 'zyx', obs); } };
+    window.__fit = { data: F, choose: choose, open: open, state: function () { return { chosen: chosen, measure: measure, pair: pair }; }, rmsRGB: rmsRGB, curve: function (id, c, k, obs) { return curve(F.sites[id][obs ? 'obs' : 'prd'][c], freqs[k], k, c === 'zyx', obs); } };
   }
 
   return { init: init };
