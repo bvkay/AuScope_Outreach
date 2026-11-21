@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>M@TE mockup 1 — featured + grid</title>
-<link rel="stylesheet" href="mockup.css?v=5">
+<link rel="stylesheet" href="mockup.css?v=6">
 </head>
 <body data-variant="1">
 <!-- Mockup 1: latest model shown large and static, then every model in a card grid. -->
@@ -44,7 +44,7 @@
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=6"></script>
+<script src="mockup.js?v=7"></script>
 <script>
 (function () {
   var A = window.MATE, M = A.models, esc = A.esc;
@@ -54,7 +54,7 @@
 
   var newest = M[0];
   document.getElementById('featured').innerHTML =
-    '<div class="fig">' + A.img(newest) + '</div>' +
+    '<div class="fig">' + A.img(newest, false, true) + '</div>' +
     '<div class="body"><p class="label">Latest model</p>' +
     '<h2><a href="' + A.href(newest) + '">' + esc(newest.title) + '</a></h2>' +
     A.byline(newest) + A.tags(newest, 6) +

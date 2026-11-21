@@ -65,9 +65,11 @@
       return m.tags.length ? '<ul class="tags">' + m.tags.slice(0, n).map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '';
     },
     // generated graphics are site-relative on the live site; a missing image leaves a plain panel
-    img: function (m, lazy) {
-      var u = /^https?:/.test(m.img) ? m.img : 'https://mate.science/' + m.img;
-      return '<img ' + (lazy ? 'loading="lazy" ' : '') + 'src="' + encodeURI(u) + '" alt="" onerror="this.parentNode.classList.add(\'noimg\');this.remove()">';
+    // Cards use a thumbnail cut to the card shape (thumbs/<slug>.jpg, made by tools/make_thumbs.py);
+    // pass full = true for the model's whole landing image.
+    img: function (m, lazy, full) {
+      var u = !full ? 'thumbs/' + m.slug + '.jpg' : (/^https?:/.test(m.img) ? m.img : 'https://mate.science/' + m.img);
+      return '<img ' + (lazy ? 'loading="lazy" ' : '') + (full ? '' : 'width="800" height="500" ') + 'src="' + encodeURI(u) + '" alt="" onerror="this.parentNode.classList.add(\'noimg\');this.remove()">';
     },
     // text search plus optional topic set and year set; sort is new | old | az
     find: function (needle, tagSet, yearSet, sort) {
