@@ -209,7 +209,7 @@ def main() -> int:
         "dims": [nx, ny, nz],
         "spacing_km": [extent[0] / (nx - 1), extent[1] / (ny - 1), extent[2] / (nz - 1)],
         "extent_km": extent,
-        "axes": ["Across (km at surface)", "Along (km at surface)", "Depth (km)"],
+        "axes": ["X (km)", "Y (km)", "Depth (km)"],
         "note": "Spherical cap shown unwrapped: horizontal distances are arc lengths at the surface.",
         "scale": volume_io.scale_meta(lo, hi),
         "nodata_voxels": 0,

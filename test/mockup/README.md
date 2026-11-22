@@ -11,7 +11,8 @@ Open `index.html`. A dark bar at the top of every page switches between the opti
 - **6**: mockup 1 with a topic menu beside the search box in place of the topic buttons.
 - **5**: a model page with a 3D viewer that runs in the browser. Three pilot models:
   Vulcan (3D inversion), Sunda megathrust (3D Underworld) and oceanic detachment faults
-  (2D ASPECT, with time steps).
+  (2D ASPECT, with time steps). The 3D models use `viewer3d.js`; the 2D model shows every
+  field as its own panel, one above the other, with `section2d.js`. Both share `viewkit.js`.
 
 ## Where the content comes from
 

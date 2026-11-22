@@ -4,7 +4,8 @@
  *
  * A scene (volumes/scenes.json) lists a model's fields, time steps, sites and saved views. Each
  * field and time step is a small uniform volume written by the scripts in tools/: a .json header
- * and a .u16 file of 16-bit values. A volume whose middle dimension is 1 is a 2D section.
+ * and a .u16 file of 16-bit values. A scene whose volumes are one cell thick is a 2D section and is
+ * handed to section2d.js.
  *
  * Three kinds of value are used throughout:
  *   - physical: what the visitor reads and types, such as 100 ohm metres;
@@ -16,7 +17,7 @@
  * ColourScale, Slices, Walls, SolidBody, Surfaces, BoxAxes, SiteLayer, Compass, Camera), then
  * Viewer, which reads the page's controls and drives the parts.
  *
- * Needs the vtk.js global. Hands the site layer to window.MATEFit (fit.js) when the scene has a
+ * Needs the vtk.js global and window.MATEKit (viewkit.js). Hands the site layer to window.MATEFit (fit.js) when the scene has a
  * model-fit file.
  */
 (() => {
@@ -29,11 +30,8 @@
   const {vtkOrientationMarkerWidget} = vtk.Interaction.Widgets;
   const {vtkInteractorStyleManipulator} = vtk.Interaction.Style;
   const Manipulators = vtk.Interaction.Manipulators;
+  const {RAW_MAX, esc, fetchJson, fetchVolume, formatNumber, dropCrowdedLabels, niceTicks, rampStops, ValueScale} = window.MATEKit;
 
-  /** Largest raw value; also what "no value" voxels of a 3D volume are redrawn as. */
-  const RAW_MAX = 65535;
-  /** Raw values of a 2D section below this are drawn see-through, so real values are kept above it. */
-  const RAW_2D_FLOOR = 80;
   /** Marks a voxel as outside the solid body. */
   const OUTSIDE = -1e9;
   /** Most extra surfaces a visitor may ask for. */
@@ -46,20 +44,16 @@
   const CLICK_SLOP_PX = 4;
   /** Steepest the view may tilt above or below level, in degrees; short of 90 so up stays up. */
   const MAX_TILT_DEG = 89;
+  /** For each of the twelve edges of a box, as vtkCubeAxesActor numbers them, the axis it runs along. */
+  const EDGE_AXIS = [0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2];
+  /** The four edges round each face of a box, faces ordered low then high for each axis. */
+  const FACE_EDGES = [[8, 7, 11, 3], [9, 1, 10, 5], [4, 9, 0, 8], [2, 11, 6, 10], [0, 3, 2, 1], [4, 5, 6, 7]];
+  /** Size of the numbers along the axes, in pixels. */
+  const TICK_FONT_PX = 13;
+  /** Space between the numbers along an axis and its title, in pixels. */
+  const TITLE_GAP_PX = 10;
   /** Time between steps while playing, in milliseconds. */
   const PLAY_INTERVAL_MS = 900;
-
-  /**
-   * Colour ramps defined here, as [fraction, hex] stops. Any other name is a vtk.js preset.
-   * "ryb" has red at the low end, so conductive (low resistivity) is red.
-   * @const {!Object<string, !Array<!Array<number|string>>>}
-   */
-  const RAMPS = {
-    mt: [[0, '#7a0403'], [.125, '#d93806'], [.25, '#f9a41b'], [.42, '#e8e86a'], [.54, '#7fd67f'],
-      [.71, '#2fa3d9'], [.875, '#3a4fc4'], [1, '#30123b']],
-    ryb: [[0, '#a50026'], [.125, '#d73027'], [.25, '#f46d43'], [.375, '#fdae61'], [.5, '#ffffbf'],
-      [.625, '#abd9e9'], [.75, '#74add1'], [.875, '#4575b4'], [1, '#313695']],
-  };
 
   /**
    * Set views as [direction from the model towards the viewer, up direction].
@@ -111,13 +105,6 @@
   const $ = (id) => document.getElementById(id);
 
   /**
-   * Escapes text for use in HTML.
-   * @param {*} text Value to escape.
-   * @return {string} The escaped text.
-   */
-  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
-
-  /**
    * Shows or hides an element, if the page has it.
    * @param {string} id Element id.
    * @param {boolean} on Whether to show it.
@@ -126,50 +113,6 @@
     const element = $(id);
     if (element) element.hidden = !on;
   };
-
-  /**
-   * Fetches a JSON file.
-   * @param {string} url Address of the file.
-   * @return {!Promise<*>} The parsed content.
-   * @throws {Error} If the server does not return the file.
-   */
-  const fetchJson = async (url) => {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`${url} could not be loaded (${response.status})`);
-    return response.json();
-  };
-
-  /**
-   * Formats a number to three significant figures, in exponent form when very large or small.
-   * @param {number} v The number.
-   * @return {string} The text.
-   */
-  const formatNumber = (v) => {
-    const size = Math.abs(v);
-    return (size !== 0 && (size >= 1e5 || size < 1e-2)) ? v.toExponential(1) : String(+v.toPrecision(3));
-  };
-
-  /**
-   * Picks round tick values across a range, aiming for about three steps.
-   * @param {number} a Low end.
-   * @param {number} b High end.
-   * @return {!Array<number>} Tick values within the range.
-   */
-  const niceTicks = (a, b) => {
-    const rough = (b - a) / 3;
-    let step = Math.pow(10, Math.floor(Math.log10(rough)));
-    const ratio = rough / step;
-    step *= ratio >= 5 ? 5 : ratio >= 2 ? 2 : 1;
-    const ticks = [];
-    for (let t = Math.ceil(a / step - 1e-9) * step; t <= b + 1e-9; t += step) ticks.push(+t.toPrecision(12));
-    return ticks;
-  };
-
-  /**
-   * @param {string} hex Colour as "#rrggbb".
-   * @return {!Array<number>} Red, green and blue, each 0 to 1.
-   */
-  const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.substr(i, 2), 16) / 255);
 
   /**
    * Splits typed text into numbers.
@@ -214,30 +157,15 @@
      * @private
      */
     static async fetch_(stem) {
-      const meta = /** @type {!VolumeMeta} */ (await fetchJson(`volumes/${stem}.json`));
-      const response = await fetch(`volumes/${stem}.u16`);
-      if (!response.ok) throw new Error(`volumes/${stem}.u16 could not be loaded (${response.status})`);
-      const raw = new Uint16Array(await response.arrayBuffer());
-      const [nx, ny, nz] = meta.dims;
-      if (raw.length !== nx * ny * nz) {
-        throw new Error(`${stem}: ${raw.length} values, but the header says ${nx} × ${ny} × ${nz}`);
-      }
+      const {meta, raw} = await fetchVolume(stem);
+      // Remember where there is no value (above the ground surface), then draw those voxels as
+      // the top of the scale so slices are not left with holes.
       let gap = null;
-      if (ny !== 1) {
-        // 3D: remember where there is no value (above the ground surface), then draw those
-        // voxels as the top of the scale so slices are not left with holes.
-        for (let n = 0; n < raw.length; n++) {
-          if (raw[n] !== 0) continue;
-          if (!gap) gap = new Uint8Array(raw.length);
-          gap[n] = 1;
-          raw[n] = RAW_MAX;
-        }
-      } else {
-        // 2D: gaps stay 0 and are drawn see-through. That cut-off is not sharp, so real values
-        // are kept clear of it (80 of 65535 is 0.1 % of the range).
-        for (let n = 0; n < raw.length; n++) {
-          if (raw[n] !== 0 && raw[n] < RAW_2D_FLOOR) raw[n] = RAW_2D_FLOOR;
-        }
+      for (let n = 0; n < raw.length; n++) {
+        if (raw[n] !== 0) continue;
+        if (!gap) gap = new Uint8Array(raw.length);
+        gap[n] = 1;
+        raw[n] = RAW_MAX;
       }
       return {meta, raw, gap};
     }
@@ -321,8 +249,6 @@
       this.spacing = meta.spacing_km.slice();
       /** @const {number} Height of the whole model in km. */
       this.depthKm = meta.extent_km[2];
-      /** @const {boolean} */
-      this.is2d = this.dims[1] === 1;
       /** @type {!Volume} */
       this.volume = volume;
       /** @type {!Crop} */
@@ -338,7 +264,7 @@
 
       /** @const {!Object} vtkImageData holding the part on show. */
       this.image = DataModel.vtkImageData.newInstance();
-      this.image.setSpacing(this.spacing[0], this.is2d ? 1 : this.spacing[1], this.spacing[2]);
+      this.image.setSpacing(...this.spacing);
 
       /** @const {!Object} */
       this.window = vtk.Rendering.Misc.vtkGenericRenderWindow.newInstance({background: [1, 1, 1]});
@@ -379,7 +305,7 @@
       style.addMouseManipulator(pan.newInstance({button: 2}));
       style.addMouseManipulator(pan.newInstance({button: 1, shift: true}));
       style.addMouseManipulator(zoom);
-      style.addGestureManipulator(Manipulators.vtkGestureCameraManipulator.newInstance());
+      style.addGestureManipulator(Manipulators.vtkGestureCameraManipulator.newInstance({rotateEnabled: false}));
       this.window.getInteractor().setInteractorStyle(style);
       container.addEventListener('contextmenu', (e) => e.preventDefault());
     }
@@ -452,7 +378,7 @@
       }
       this.image.setDimensions(cx, cy, cz);
       // z = 0 stays at the top of the whole model, whatever is cut away.
-      this.image.setOrigin(crop.i0 * spacing[0], this.is2d ? 0 : crop.j0 * spacing[1], -this.depthKm + crop.k0 * spacing[2]);
+      this.image.setOrigin(crop.i0 * spacing[0], crop.j0 * spacing[1], -this.depthKm + crop.k0 * spacing[2]);
       this.image.getPointData().setScalars(dataArray('v', values, 1));
       this.image.modified();
       const b = this.image.getBounds();
@@ -509,78 +435,25 @@
   }
 
   /**
-   * The colour scale: a named ramp stretched between two limits, and the conversions between
-   * physical, stored and raw values for the field on show.
+   * The colour scale of the field on show: a named ramp stretched between two limits.
    */
-  class ColourScale {
+  class ColourScale extends ValueScale {
     constructor() {
+      super();
       /** @const {!Object} vtkColorTransferFunction over raw values. */
       this.transfer = Core.vtkColorTransferFunction.newInstance();
-      /** @private {number} */
-      this.lo_ = 0;
-      /** @private {number} */
-      this.hi_ = 1;
-      /** @type {boolean} Whether the field is stored as log10. */
-      this.isLog = true;
-    }
-
-    /** @param {!VolumeMeta} meta Header of the volume on show. */
-    setStorage(meta) {
-      this.lo_ = meta.scale.lo;
-      this.hi_ = meta.scale.hi;
-      this.isLog = meta.log !== false;
-    }
-
-    /**
-     * @param {number} stored A stored value.
-     * @return {number} The raw value (not rounded).
-     */
-    toRaw(stored) {
-      return 1 + (stored - this.lo_) / (this.hi_ - this.lo_) * (RAW_MAX - 1);
-    }
-
-    /**
-     * @param {number} physical A physical value.
-     * @return {number} The stored value.
-     */
-    toStored(physical) {
-      return this.isLog ? Math.log10(physical) : physical;
-    }
-
-    /**
-     * @param {number} stored A stored value.
-     * @return {number} The physical value.
-     */
-    toPhysical(stored) {
-      return this.isLog ? Math.pow(10, stored) : stored;
-    }
-
-    /**
-     * @param {number} fraction Position in the stored range, 0 to 1.
-     * @return {number} The physical value there.
-     */
-    physicalAt(fraction) {
-      return this.toPhysical(this.lo_ + fraction * (this.hi_ - this.lo_));
-    }
-
-    /**
-     * @param {number} physical A typed value.
-     * @return {boolean} Whether it can be shown on this scale.
-     */
-    isValid(physical) {
-      return isFinite(physical) && (!this.isLog || physical > 0);
     }
 
     /**
      * Stretches a ramp between two limits.
      * @param {number} low Lower limit, stored.
      * @param {number} high Upper limit, stored.
-     * @param {string} rampName Key of RAMPS, or a vtk.js preset name.
+     * @param {string} rampName Name of the ramp, as MATEKit.rampStops takes it.
      * @param {boolean} reversed Whether to run the ramp backwards.
      * @return {!Array<!Array<number>>} The stops used, as [fraction, r, g, b].
      */
     apply(low, high, rampName, reversed) {
-      let stops = ColourScale.ramp_(rampName);
+      let stops = rampStops(rampName);
       if (reversed) stops = stops.map(([at, r, g, b]) => [1 - at, r, g, b]).reverse();
       this.transfer.removeAllPoints();
       stops.forEach(([at, r, g, b]) => this.transfer.addRGBPoint(this.toRaw(low + at * (high - low)), r, g, b));
@@ -604,49 +477,11 @@
       this.transfer.getColor(this.toRaw(stored), c);
       return c.map((v) => v * 0.85);
     }
-
-    /**
-     * Picks legend ticks at their true place: the two limits, plus powers of ten (log fields)
-     * or the midpoint (linear fields).
-     * @param {number} low Lower limit, stored.
-     * @param {number} high Upper limit, stored.
-     * @return {!Array<number>} Tick positions, stored.
-     */
-    ticks(low, high) {
-      const span = high - low;
-      if (!this.isLog) return [low, (low + high) / 2, high];
-      let decades = [];
-      for (let d = Math.ceil(low + 1e-9); d < high - 1e-9; d++) {
-        if (d - low > 0.14 * span && high - d > 0.14 * span) decades.push(d);   // clear of the end labels
-      }
-      if (decades.length > 3) {
-        const every = Math.ceil(decades.length / 3);
-        decades = decades.filter((_, n) => n % every === 0);
-      }
-      return [low, ...decades, high];
-    }
-
-    /**
-     * @param {string} name Ramp name.
-     * @return {!Array<!Array<number>>} Stops as [fraction, r, g, b].
-     * @private
-     */
-    static ramp_(name) {
-      if (RAMPS[name]) return RAMPS[name].map(([at, hex]) => [at, ...hexToRgb(hex)]);
-      const preset = Core.vtkColorTransferFunction.vtkColorMaps.getPresetByName(name);
-      if (!preset) throw new Error(`unknown colour ramp "${name}"`);
-      const p = preset.RGBPoints;
-      const first = p[0];
-      const last = p[p.length - 4];
-      const stops = [];
-      for (let n = 0; n < p.length; n += 4) stops.push([(p[n] - first) / (last - first), p[n + 1], p[n + 2], p[n + 3]]);
-      return stops;
-    }
   }
 
   /**
    * Three flat sections through the model, one across each axis, showing the model's own cells
-   * unsmoothed. A 2D section uses only the middle one.
+   * unsmoothed.
    */
   class Slices {
     /**
@@ -667,15 +502,6 @@
         property.setRGBTransferFunction(0, scale.transfer);
         property.setUseLookupTableScalarRange(true);
         property.setInterpolationTypeToNearest();
-        if (stage.is2d) {
-          // See-through where there is no value (raw 0), solid from RAW_2D_FLOOR up.
-          const opacity = DataModel.vtkPiecewiseFunction.newInstance();
-          opacity.addPoint(0, 0);
-          opacity.addPoint(30, 0);
-          opacity.addPoint(RAW_2D_FLOOR - 1, 1);
-          opacity.addPoint(RAW_MAX, 1);
-          property.setPiecewiseFunction(0, opacity);
-        }
         stage.add(actor);
         this.byAxis_[axis] = {mapper, actor};
       });
@@ -956,6 +782,9 @@
     constructor(stage, names) {
       /** @private @const {!Stage} */
       this.stage_ = stage;
+      /** @private @const {!CanvasRenderingContext2D} Used to measure the numbers along the axes. */
+      this.ruler_ = document.createElement('canvas').getContext('2d');
+      this.ruler_.font = `${TICK_FONT_PX}px Arial`;
 
       const outline = vtkOutlineFilter.newInstance();
       outline.setInputData(stage.image);
@@ -974,25 +803,72 @@
       Core.vtkCubeAxesActor.extend(this.axes, {}, {generateTicks: (bounds) => this.ticks_(bounds)});
       // Label one edge per axis, not every outer edge. The library marks each edge it would
       // label with 1; all but the first for each axis are changed to 2, "draw the line, no text".
-      const EDGE_AXIS = [0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2];
       const labelEdges = this.axes.updateTextData;
       this.axes.updateTextData = (faces, edges, ticks, strings) => {
-        const seen = [false, false, false];
+        const endOn = BoxAxes.endOnAxis_(faces);
+        let drawn = faces;
         const chosen = Array.from(edges);
+        if (endOn >= 0) {
+          // Seen end-on, only the far face is labelled, and its other edges are left bare.
+          const far = faces[2 * endOn] ? 2 * endOn : 2 * endOn + 1;
+          drawn = faces.map((face, n) => n === far);
+          chosen.forEach((mark, n) => {
+            if (FACE_EDGES[far].includes(n)) chosen[n] = 1;
+            else if (mark === 1) chosen[n] = 2;
+          });
+        }
+        const labelled = [false, false, false];
         for (let n = 0; n < 12; n++) {
           if (chosen[n] !== 1) continue;
-          if (seen[EDGE_AXIS[n]]) chosen[n] = 2;
-          else seen[EDGE_AXIS[n]] = true;
+          if (labelled[EDGE_AXIS[n]]) chosen[n] = 2;
+          else labelled[EDGE_AXIS[n]] = true;
         }
-        return labelEdges(faces, chosen, ticks, strings);
+        labelEdges(drawn, chosen, ticks, strings);
+        if (endOn >= 0) this.bringTextForward_(endOn);
       };
       this.axes.setDataBounds(stage.bounds);      // before anything is drawn
       this.axes.setCamera(stage.camera);
-      this.axes.setAxisLabels(stage.is2d ? [names[0], '', names[2]] : names);
-      this.axes.setTickTextStyle({fontColor: '#333333', fontSize: 13, fontFamily: 'Arial'});
+      this.axes.setAxisLabels(names);
+      this.axes.setTickTextStyle({fontColor: '#333333', fontSize: TICK_FONT_PX, fontFamily: 'Arial'});
       this.axes.setAxisTextStyle({fontColor: '#282572', fontSize: 15, fontStyle: 'bold', fontFamily: 'Arial'});
       this.axes.getProperty().setColor(0.62, 0.64, 0.68);
       stage.add(this.axes, false);
+    }
+
+    /**
+     * Finds the axis that points at the viewer, if the box is seen head-on.
+     *
+     * From any other direction the library draws one face per axis. Head-on it draws the far
+     * face of one axis and, of each other axis, both faces or neither.
+     *
+     * @param {!Array<boolean>} faces Faces the library draws: low and high for each axis.
+     * @return {number} The axis seen end-on (0 east, 1 north, 2 up), or -1 if there is none.
+     * @private
+     */
+    static endOnAxis_(faces) {
+      const count = [0, 1, 2].map((axis) => Number(faces[2 * axis]) + Number(faces[2 * axis + 1]));
+      const single = count.filter((n) => n === 1).length;
+      return single === 1 ? count.indexOf(1) : -1;
+    }
+
+    /**
+     * Moves the titles and numbers from the far face of the box to the near one.
+     *
+     * Head-on, the library places them around the far face, where the model in front hides
+     * them. Around the near face they sit clear of it.
+     *
+     * @param {number} axis The axis seen end-on.
+     * @private
+     */
+    bringTextForward_(axis) {
+      const bounds = this.axes.getDataBounds();
+      const eye = this.stage_.camera.getPosition()[axis];
+      const near = eye > (bounds[2 * axis] + bounds[2 * axis + 1]) / 2 ? bounds[2 * axis + 1] : bounds[2 * axis];
+      const text = this.axes.getTextPolyData();
+      const points = text.getPoints().getData();
+      for (let n = axis; n < points.length; n += 3) points[n] = near;
+      text.getPoints().modified();
+      text.modified();
     }
 
     /** Fits the axes to the part on show and the exaggeration. Call after either changes. */
@@ -1012,10 +888,11 @@
       const ve = this.stage_.exaggeration;
       const km = [niceTicks(bounds[0], bounds[1]), niceTicks(bounds[2], bounds[3]), niceTicks(bounds[4] / ve, bounds[5] / ve)];
       const thousands = (v) => String(+v.toPrecision(6)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-      return {
-        ticks: [km[0], km[1], km[2].map((v) => v * ve)],
-        tickStrings: km.map((axis) => axis.map(thousands)),
-      };
+      const tickStrings = km.map((axis) => axis.map(thousands));
+      // Titles sit beyond the widest number, so the two never overlap beside an upright edge.
+      const widest = Math.max(...tickStrings.flat().map((text) => this.ruler_.measureText(text).width));
+      this.axes.setAxisTitlePixelOffset(this.axes.getTickLabelPixelOffset() + widest + TITLE_GAP_PX);
+      return {ticks: [km[0], km[1], km[2].map((v) => v * ve)], tickStrings};
     }
   }
 
@@ -1200,11 +1077,11 @@
         fontSizeScale: (resolution) => resolution / 2.4,
         faceColor: '#282572', faceRotation: 0, edgeThickness: 0.08, edgeColor: 'white', resolution: 300,
       });
-      // The library draws the east and west faces with their text lying on its side, so those
-      // two are turned to read upright like the others.
+      // The library draws the east and west faces with their text lying on its side and the
+      // north face with it upside down, so those three are turned to read upright.
       this.cube_.setXPlusFaceProperty({text: labels[0], faceRotation: 90});
       this.cube_.setXMinusFaceProperty({text: labels[1], faceRotation: 270});
-      this.cube_.setYPlusFaceProperty({text: labels[2]});
+      this.cube_.setYPlusFaceProperty({text: labels[2], faceRotation: 180});
       this.cube_.setYMinusFaceProperty({text: labels[3]});
       this.cube_.setZPlusFaceProperty({text: 'UP', faceColor: '#3F88C8'});
       this.cube_.setZMinusFaceProperty({text: 'DN', faceColor: '#6C757D'});
@@ -1303,7 +1180,6 @@
       stage.camera.setPosition(cx + from[0], cy + from[1], cz + from[2]);
       stage.camera.setViewUp(...up);
       stage.renderer.resetCamera();
-      if (stage.is2d) stage.camera.zoom(1.2);
       stage.renderer.resetCameraClippingRange();
       this.compass_.follow();
       stage.render();
@@ -1399,24 +1275,22 @@
       const compassLabels = scene.compass || ['E', 'W', 'N', 'S'];
       /** @private @const {!Stage} */
       this.stage_ = new Stage($('view'), volume);
-      /** @private @const {boolean} */
-      this.is2d_ = this.stage_.is2d;
       /** @private @const {!ColourScale} */
       this.scale_ = new ColourScale();
       this.scale_.setStorage(volume.meta);
       // The order parts are made in is the order they are drawn in.
       /** @private @const {!Slices} */
       this.slices_ = new Slices(this.stage_, this.scale_);
-      /** @private @const {?Walls} */
-      this.walls_ = this.is2d_ ? null : new Walls(this.stage_, this.scale_);
-      /** @private @const {?SolidBody} */
-      this.solid_ = this.is2d_ ? null : new SolidBody(this.stage_, this.scale_);
+      /** @private @const {!Walls} */
+      this.walls_ = new Walls(this.stage_, this.scale_);
+      /** @private @const {!SolidBody} */
+      this.solid_ = new SolidBody(this.stage_, this.scale_);
       /** @private @const {!BoxAxes} */
       this.box_ = new BoxAxes(this.stage_, names);
       /** @private @const {?SiteLayer} */
       this.sites_ = sites ? new SiteLayer(this.stage_, sites, $('view')) : null;
-      /** @private @const {?Surfaces} */
-      this.surfaces_ = this.is2d_ ? null : new Surfaces(this.stage_, this.scale_);
+      /** @private @const {!Surfaces} */
+      this.surfaces_ = new Surfaces(this.stage_, this.scale_);
       /** @private @const {!Compass} */
       this.compass_ = new Compass(this.stage_, compassLabels);
       /** @private @const {!Camera} */
@@ -1459,7 +1333,6 @@
     setUpPage_(names, compassLabels) {
       const scene = this.scene_;
       const [nx, ny, nz] = this.stage_.dims;
-      const is2d = this.is2d_;
 
       $('field').innerHTML = scene.fields.map((f, n) => `<option value="${n}">${esc(f.label)}</option>`).join('');
       $('preset').innerHTML = this.presets_.map((p, n) => `<option value="${n}">${esc(p.name)}</option>`).join('');
@@ -1473,22 +1346,22 @@
         $('t-o').textContent = scene.times[this.time_].label;
       }
 
-      // A 2D section has no slices, volume, walls or north-south cuts, and one set view.
-      ['tab-slices', 'tab-volume', 'walls-tick', 'cut-s-row', 'cut-n-row'].forEach((id) => show(id, !is2d));
+      $('scene-note').textContent = scene.note || '';
+      show('scene-note', !!scene.note);
       show('sites-tick', !!this.sites_);
       show('sitefit-tick', !!(this.sites_ && scene.fit));
       [...$('views').children].forEach((button) => {
-        if (is2d) button.hidden = button.dataset.v !== 'south';
         if (scene.viewNames && scene.viewNames[button.dataset.v]) button.textContent = scene.viewNames[button.dataset.v];
       });
-      if (!is2d) {
-        const plain = (title) => title.replace(/\s*\(.*\)/, '').toLowerCase();
-        $('k').max = nz - 1;
-        $('i').max = nx - 1;
-        $('j').max = ny - 1;
-        $('i-name').textContent = `Section across ${plain(names[0])}`;
-        $('j-name').textContent = `Section across ${plain(names[1])}`;
-      }
+      const plain = (title) => {
+        const name = title.replace(/\s*\(.*\)/, '');
+        return name.length > 1 ? name.toLowerCase() : name;
+      };
+      $('k').max = nz - 1;
+      $('i').max = nx - 1;
+      $('j').max = ny - 1;
+      $('i-name').textContent = `Section across ${plain(names[0])}`;
+      $('j-name').textContent = `Section across ${plain(names[1])}`;
 
       // Name the sides the way this model names them.
       const SIDE = {W: 'West', E: 'East', S: 'South', N: 'North'};
@@ -1508,7 +1381,7 @@
       const stage = this.stage_;
 
       on(['k', 'i', 'j', 'on-k', 'on-i', 'on-j', 'op-k', 'op-i', 'op-j', 'on-solid', 's-op', 'surf-op',
-        'on-sites', 'on-axes', 'on-outline'], 'input', () => this.sync_());
+        'on-sites', 'on-axes', 'on-grid', 'on-outline'], 'input', () => this.sync_());
       on(['cmap', 'rev', 'vmin', 'vmax'], 'change', () => this.rescale_());
       on(['s-min-on', 's-max-on', 's-min', 's-max', 's-below'], 'change', () => {
         this.updateBody_();
@@ -1656,6 +1529,7 @@
       $('ramp').style.background = `linear-gradient(90deg,${cssStops.join(',')})`;
       $('ticks').innerHTML = scale.ticks(low, high).map((v) =>
         `<span style="left:${((v - low) / (high - low) * 100).toFixed(1)}%">${formatNumber(scale.toPhysical(v))}</span>`).join('');
+      dropCrowdedLabels($('ticks'));
       return true;
     }
 
@@ -1667,7 +1541,7 @@
       if (!this.applyScale_()) return;
       this.updateWalls_();
       this.colourBody_();
-      if (this.surfaces_) this.surfaces_.recolour();
+      this.surfaces_.recolour();
       this.sync_();
     }
 
@@ -1676,7 +1550,7 @@
      * @private
      */
     updateWalls_() {
-      if (this.walls_ && $('on-walls').checked) this.walls_.update();
+      if ($('on-walls').checked) this.walls_.update();
     }
 
     /**
@@ -1773,27 +1647,23 @@
       const [nx, ny, nz] = stage.dims;
       const sp = stage.spacing;
       const checked = (id) => $(id).checked;
-      if (this.is2d_) {
-        this.slices_.set('i', 0, false, 1);
-        this.slices_.set('k', 0, false, 1);
-        this.slices_.set('j', 0, true, 1);
-      } else {
-        const bodyOn = checked('on-solid') && this.body_.ok;
-        this.solid_.actor.setVisibility(bodyOn);
-        this.solid_.actor.getProperty().setOpacity(this.opacity_('s-op'));
-        $('s-o').textContent = bodyOn ? this.body_.text : '';
-        this.surfaces_.setOpacity(this.opacity_('surf-op'));
-        ['i', 'j', 'k'].forEach((axis) => {
-          this.slices_.set(axis, +$(axis).value, checked(`on-${axis}`), this.opacity_(`op-${axis}`));
-        });
-        const km = (voxels, axis) => (voxels * sp[axis]).toFixed(sp[axis] < 1 ? 1 : 0);
-        $('k-o').textContent = `${km(nz - 1 - $('k').value, 2)} km deep`;
-        $('i-o').textContent = `${km(+$('i').value, 0)} km`;
-        $('j-o').textContent = `${km(+$('j').value, 1)} km`;
-        this.walls_.actor.setVisibility(checked('on-walls'));
-      }
+      const bodyOn = checked('on-solid') && this.body_.ok;
+      this.solid_.actor.setVisibility(bodyOn);
+      this.solid_.actor.getProperty().setOpacity(this.opacity_('s-op'));
+      $('s-o').textContent = bodyOn ? this.body_.text : '';
+      this.surfaces_.setOpacity(this.opacity_('surf-op'));
+      ['i', 'j', 'k'].forEach((axis) => {
+        this.slices_.set(axis, +$(axis).value, checked(`on-${axis}`), this.opacity_(`op-${axis}`));
+      });
+      const km = (voxels, axis) => (voxels * sp[axis]).toFixed(sp[axis] < 1 ? 1 : 0);
+      $('k-o').textContent = `${km(nz - 1 - $('k').value, 2)} km deep`;
+      $('i-o').textContent = `${km(+$('i').value, 0)} km`;
+      $('j-o').textContent = `${km(+$('j').value, 1)} km`;
+      this.walls_.actor.setVisibility(checked('on-walls'));
       if (this.sites_) this.sites_.setVisible(checked('on-sites'));
       this.box_.axes.setVisibility(checked('on-axes'));
+      this.box_.axes.setGridLines(checked('on-grid'));
+      $('on-grid').disabled = !checked('on-axes');
       this.box_.outline.setVisibility(checked('on-outline'));
       stage.render();
     }
@@ -1883,7 +1753,7 @@
      */
     noteExtent_() {
       const km = this.stage_.cropDims.map((n, axis) => (n - 1) * this.stage_.spacing[axis]);
-      const sides = (this.is2d_ ? [km[0], km[2]] : km).map((v) => v.toFixed(v < 100 ? 1 : 0));
+      const sides = km.map((v) => v.toFixed(v < 100 ? 1 : 0));
       $('cut-o').textContent = `Showing ${sides.join(' × ')} km`;
     }
 
@@ -1906,7 +1776,6 @@
       const crop = stage.fullCrop();
       let error = '';
       CUTS.forEach(([id, axis, key, fromLow]) => {
-        if (this.is2d_ && axis === 1) return;
         const km = $(id).value === '' ? 0 : +$(id).value;
         if (!isFinite(km) || km < 0) {
           error = 'Use zero or a positive distance.';
@@ -1915,13 +1784,13 @@
         const voxels = Math.round(km / stage.spacing[axis]);
         crop[key] = fromLow > 0 ? voxels : stage.dims[axis] - 1 - voxels;
       });
-      const tooThin = crop.i1 - crop.i0 < 1 || (!this.is2d_ && crop.j1 - crop.j0 < 1) || crop.k1 - crop.k0 < 1;
+      const tooThin = crop.i1 - crop.i0 < 1 || crop.j1 - crop.j0 < 1 || crop.k1 - crop.k0 < 1;
       if (!error && tooThin) error = 'Those cuts leave nothing to show.';
       $('cut-err').textContent = error;
       if (error) return;
 
       stage.setCrop(crop);
-      if (this.solid_) this.solid_.resize();
+      this.solid_.resize();
       if (this.sites_) this.sites_.place();
       this.updateSiteCount_();
       this.updateWalls_();
@@ -1962,26 +1831,25 @@
       $('ve').value = String(d.ve || 1);
       $('on-outline').checked = shows.outline !== false;
       $('on-axes').checked = shows.axes !== false;
+      $('on-grid').checked = shows.grid !== false;
       $('on-sites').checked = shows.sites !== false;
       $('on-sitefit').checked = !!shows.siteFit;
       $('on-walls').checked = !!shows.walls;
       $('compass').value = d.marker || 'cube';
       [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']]
           .forEach(([id, key]) => { $(id).value = cut[key] || 0; });
-      if (!this.is2d_) {
-        $('k').value = slices.depth_km != null ? nz - 1 - Math.round(slices.depth_km / sp[2]) : Math.round(nz * 0.85);
-        $('i').value = slices.x_km != null ? Math.round(slices.x_km / sp[0]) : Math.round(nx / 2);
-        $('j').value = slices.y_km != null ? Math.round(slices.y_km / sp[1]) : Math.round(ny / 2);
-        $('on-k').checked = slices.showDepth !== false;
-        $('on-i').checked = !!slices.showX;
-        $('on-j').checked = slices.showY !== false;
-        $('op-k').value = or(slices.opacityDepth, 100);
-        $('op-i').value = or(slices.opacityX, 100);
-        $('op-j').value = or(slices.opacityY, 100);
-        $('on-solid').checked = d.showSolid !== false;
-        $('s-op').value = or(d.solidOpacity, 100);
-        $('surf-op').value = or(d.surfaceOpacity, 50);
-      }
+      $('k').value = slices.depth_km != null ? nz - 1 - Math.round(slices.depth_km / sp[2]) : Math.round(nz * 0.85);
+      $('i').value = slices.x_km != null ? Math.round(slices.x_km / sp[0]) : Math.round(nx / 2);
+      $('j').value = slices.y_km != null ? Math.round(slices.y_km / sp[1]) : Math.round(ny / 2);
+      $('on-k').checked = slices.showDepth !== false;
+      $('on-i').checked = !!slices.showX;
+      $('on-j').checked = slices.showY !== false;
+      $('op-k').value = or(slices.opacityDepth, 100);
+      $('op-i').value = or(slices.opacityX, 100);
+      $('op-j').value = or(slices.opacityY, 100);
+      $('on-solid').checked = d.showSolid !== false;
+      $('s-op').value = or(d.solidOpacity, 100);
+      $('surf-op').value = or(d.surfaceOpacity, 50);
       if (this.sites_) this.sites_.setTinted($('on-sitefit').checked);
 
       await this.showVolume_(false);        // brings the field's own scale, solid and surfaces
@@ -1990,11 +1858,11 @@
       this.applyCut_();
       this.camera_.tilt = +d.tilt || 0;
       this.camera_.setViewAngle(+d.viewAngle || 30);
-      let view = this.is2d_ ? 'south' : 'oblique';
-      if (!this.is2d_ && d.from) {
+      let view = 'oblique';
+      if (d.from) {
         this.camera_.setCustom(d.from);
         view = 'custom';
-      } else if (!this.is2d_ && this.camera_.has(d.view)) {
+      } else if (this.camera_.has(d.view)) {
         view = d.view;
       }
       this.look_(view, true);
@@ -2016,7 +1884,7 @@
         view: this.camera_.current || 'oblique',
         ve: this.stage_.exaggeration,
         marker: $('compass').value,
-        show: {outline: checked('on-outline'), axes: checked('on-axes'), sites: checked('on-sites'),
+        show: {outline: checked('on-outline'), axes: checked('on-axes'), grid: checked('on-grid'), sites: checked('on-sites'),
           siteFit: checked('on-sitefit'), walls: checked('on-walls')},
         cut: {w: num('cut-w'), e: num('cut-e'), s: num('cut-s'), n: num('cut-n'), t: num('cut-t'), b: num('cut-b')},
       };
@@ -2025,21 +1893,19 @@
         vmin: num('vmin'), vmax: num('vmax'), cmap: $('cmap').value, reverse: checked('rev'),
       };
       if (this.scene_.times) defaults.time = this.time_;
-      if (!this.is2d_) {
-        defaults.slices = {
-          depth_km: km(nz - 1 - num('k'), 2), x_km: km(num('i'), 0), y_km: km(num('j'), 1),
-          showDepth: checked('on-k'), showX: checked('on-i'), showY: checked('on-j'),
-          opacityDepth: num('op-k'), opacityX: num('op-i'), opacityY: num('op-j'),
-        };
-        defaults.showSolid = checked('on-solid');
-        defaults.solidOpacity = num('s-op');
-        defaults.surfaceOpacity = num('surf-op');
-        field.solid = {};
-        if (checked('s-min-on')) field.solid.min = num('s-min');
-        if (checked('s-max-on')) field.solid.max = num('s-max');
-        if (num('s-below') > 0) field.solid.below_km = num('s-below');
-        field.surfaces = parseNumberList($('surf').value);
-      }
+      defaults.slices = {
+        depth_km: km(nz - 1 - num('k'), 2), x_km: km(num('i'), 0), y_km: km(num('j'), 1),
+        showDepth: checked('on-k'), showX: checked('on-i'), showY: checked('on-j'),
+        opacityDepth: num('op-k'), opacityX: num('op-i'), opacityY: num('op-j'),
+      };
+      defaults.showSolid = checked('on-solid');
+      defaults.solidOpacity = num('s-op');
+      defaults.surfaceOpacity = num('surf-op');
+      field.solid = {};
+      if (checked('s-min-on')) field.solid.min = num('s-min');
+      if (checked('s-max-on')) field.solid.max = num('s-max');
+      if (num('s-below') > 0) field.solid.below_km = num('s-below');
+      field.surfaces = parseNumberList($('surf').value);
       return {defaults, field};
     }
 
@@ -2073,9 +1939,17 @@
       if (!records[name]) throw new Error(`no record for scene "${name}"`);
       renderRecord(scene, records[name], name);
 
-      const store = new VolumeStore();
       const first = scene.fields[0];
       const firstStem = scene.times ? first.stem.replace('{t}', scene.times[scene.times.length - 1].id) : first.stem;
+      const header = await fetchJson(`volumes/${firstStem}.json`);
+      if (header.dims[1] === 1) {
+        // One cell thick: a 2D section, which has its own viewer.
+        await window.MATESection.open({scene, mount: document.querySelector('.app')});
+        message.remove();
+        return;
+      }
+
+      const store = new VolumeStore();
       const [volume, siteFile] = await Promise.all([
         store.load(firstStem),
         scene.sites ? fetchJson(`volumes/${scene.sites}`) : null,

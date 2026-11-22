@@ -145,6 +145,7 @@
    "sunda",
    "earthquake"
   ],
+  "note": "Drawn as a flat box. X and Y are distances at the surface; the real model narrows with depth.",
   "compass": [
    "X+",
    "X−",

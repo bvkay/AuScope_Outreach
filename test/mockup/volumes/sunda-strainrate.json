@@ -19,8 +19,8 @@
   2891.0
  ],
  "axes": [
-  "Across (km at surface)",
-  "Along (km at surface)",
+  "X (km)",
+  "Y (km)",
   "Depth (km)"
  ],
  "note": "Spherical cap shown unwrapped: horizontal distances are arc lengths at the surface.",
