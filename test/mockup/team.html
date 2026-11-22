@@ -6,39 +6,41 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>Team — M@TE (mockup)</title>
-<link rel="stylesheet" href="mockup.css?v=6">
+<link rel="stylesheet" href="mockup.css?v=7">
 </head>
 <body data-page="team">
 <!-- Team and contact. People, roles and wording are the live site's own (contact.qmd); photos are
-     loaded from mate.science, not copied. -->
+     loaded from mate.science, not copied.
+     One page for all mockups: mockup.css lays it out per mockup (see "Shared pages"). -->
 
-<main class="wrap">
+<main class="wrap page">
   <div class="page-head">
     <h1>The M@TE team</h1>
     <p class="lead"><b>Model Atlas of the Earth (M@TE)</b> is developed by an international team of scientists and professional software developers in the School of Geosciences at the University of Sydney, with contributions from the Sydney Informatics Hub, National Computational Infrastructure (NCI) and AuScope.</p>
   </div>
 
-  <div class="people-grid" id="people" style="margin-top:22px"></div>
+  <div class="page-body">
+    <div class="page-main"><div class="team" id="people"></div></div>
 
-  <div class="page-head" id="contact"><h1 style="font-size:24px">Contact</h1></div>
-  <div class="cards2 prose" style="margin-top:12px">
-    <div class="panel">
-      <p class="label">Submit a model</p>
-      <p style="margin-top:6px">M@TE accepts model submissions via GitHub. Open an issue in the submission repository and use the structured template to describe your model: title, abstract, creator ORCIDs, publication DOI, software, research tags and links to model files.</p>
-      <p>Submissions are currently <b>by invitation only</b>, as M@TE is being intentional about showcasing a diverse and representative set of models.</p>
-      <a class="btn" href="https://github.com/ModelAtlasofTheEarth/model-submission">Model submission repository</a>
-    </div>
-    <div class="panel">
-      <p class="label">Get in touch</p>
-      <p style="margin-top:6px">For general enquiries about M@TE, open a GitHub Discussion or Issue in the main repository.</p>
-      <p>Join the growing community of researchers building reproducible, reusable geoscientific models.</p>
-      <a class="btn ghost" href="https://github.com/ModelAtlasofTheEarth/mate-website">M@TE on GitHub</a>
-    </div>
+    <aside class="page-side side" id="contact" aria-label="Contact">
+      <div class="panel">
+        <p class="label">Submit a model</p>
+        <p>M@TE accepts model submissions via GitHub. Open an issue in the submission repository and use the structured template to describe your model: title, abstract, creator ORCIDs, publication DOI, software, research tags and links to model files.</p>
+        <p>Submissions are currently <b>by invitation only</b>, as M@TE is being intentional about showcasing a diverse and representative set of models.</p>
+        <a class="btn" href="https://github.com/ModelAtlasofTheEarth/model-submission">Model submission repository</a>
+      </div>
+      <div class="panel">
+        <p class="label">Get in touch</p>
+        <p>For general enquiries about M@TE, open a GitHub Discussion or Issue in the main repository.</p>
+        <p>Join the growing community of researchers building reproducible, reusable geoscientific models.</p>
+        <a class="btn ghost" href="https://github.com/ModelAtlasofTheEarth/mate-website">M@TE on GitHub</a>
+      </div>
+    </aside>
   </div>
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=7"></script>
+<script src="mockup.js?v=9"></script>
 <script>
 (function () {
   var P = [

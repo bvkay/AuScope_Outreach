@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>M@TE mockup 3 — filter sidebar</title>
-<link rel="stylesheet" href="mockup.css?v=6">
+<link rel="stylesheet" href="mockup.css?v=7">
 </head>
 <body data-variant="3">
 <!-- Mockup 3: closest to AusMT. A filter panel on the left, results on the right, nothing above them. -->
@@ -45,38 +45,7 @@
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=7"></script>
-<script>
-(function () {
-  var A = window.MATE, M = A.models, esc = A.esc;
-  var check = function (group, value, label, n) {
-    return '<label><input type="checkbox" data-g="' + group + '" value="' + esc(value) + '"> <span>' + esc(label) + '</span><span class="n mono">' + n + '</span></label>';
-  };
-  var years = {};
-  M.forEach(function (m) { years[m.year] = (years[m.year] || 0) + 1; });
-  document.getElementById('years').innerHTML = Object.keys(years).sort().reverse().map(function (y) { return check('y', y, y, years[y]); }).join('');
-  // most-used topics first, then alphabetical
-  document.getElementById('topics').innerHTML = Object.keys(A.topics).sort(function (a, b) {
-    return A.topics[b] - A.topics[a] || a.localeCompare(b);
-  }).map(function (t) { return check('t', t, t, A.topics[t]); }).join('');
-
-  var q = document.getElementById('q'), sort = document.getElementById('sort'), side = document.querySelector('.filters');
-  var picked = function (g) { return [].map.call(side.querySelectorAll('input[data-g=' + g + ']:checked'), function (i) { return i.value; }); };
-  side.addEventListener('change', draw); q.addEventListener('input', draw); sort.addEventListener('change', draw);
-  document.getElementById('clear').onclick = function () {
-    q.value = ''; [].forEach.call(side.querySelectorAll('input:checked'), function (i) { i.checked = false; }); draw();
-  };
-  function draw() {
-    var rows = A.find(q.value, picked('t'), picked('y'), sort.value);
-    document.getElementById('count').textContent = rows.length + ' of ' + M.length + ' shown';
-    document.getElementById('rows').innerHTML = rows.length ? rows.map(function (m) {
-      return '<a class="rowcard" href="' + A.href(m) + '"><div class="thumb">' + A.img(m, true) + '</div>' +
-        '<div class="body">' + A.byline(m) + '<h3>' + esc(m.title) + '</h3>' + A.tags(m, 5) +
-        '<p class="doi">doi:' + esc(m.doi) + '</p></div></a>';
-    }).join('') : '<p class="empty">No models match those filters.</p>';
-  }
-  draw();
-})();
-</script>
+<script src="mockup.js?v=9"></script>
+<script>window.MATE.filterCatalogue('rowcard');</script>
 </body>
 </html>

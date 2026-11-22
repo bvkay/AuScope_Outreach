@@ -6,21 +6,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>News — M@TE (mockup)</title>
-<link rel="stylesheet" href="mockup.css?v=6">
+<link rel="stylesheet" href="mockup.css?v=7">
 </head>
 <body data-page="news">
 <!-- News. The three dated items are the live site's own (news/index.qmd). "Latest models" is new:
-     it is filled from the model list, so the page has fresh content whenever a model is added. -->
+     it is filled from the model list, so the page has fresh content whenever a model is added.
+     One page for all mockups: mockup.css lays it out per mockup (see "Shared pages"). -->
 
-<main class="wrap">
+<main class="wrap page">
   <div class="page-head">
     <h1>News</h1>
     <p class="lead">Announcements, publications and events from the M@TE community.</p>
   </div>
 
-  <div class="model-layout">
-    <div class="stack">
-      <section class="panel">
+  <div class="page-body">
+    <div class="page-main">
+      <section>
+        <p class="label">Announcements</p>
         <ul class="news-list">
           <li><time datetime="2026-06">June 2026</time><div><h3>Website revamp</h3><p>The M@TE website is now powered by <a href="https://quarto.org/">Quarto</a>.</p></div></li>
           <li><time datetime="2025-06">June 2025</time><div><h3>Recognised by NCI</h3><p>NCI recognises M@TE in its 2025 <a href="https://nci.org.au/about-us/annual-reports">annual report</a>, page 34.</p></div></li>
@@ -28,16 +30,16 @@
         </ul>
       </section>
 
-      <section class="panel">
-        <p class="label" style="margin-bottom:12px">Latest models</p>
-        <ul class="news-list" id="latest"></ul>
+      <section>
+        <p class="label">Latest models</p>
+        <div id="latest"></div>
       </section>
     </div>
 
-    <aside class="side">
+    <aside class="page-side side">
       <div class="panel">
         <p class="label">Follow M@TE</p>
-        <p style="font-size:14px;margin:6px 0 12px">New models and platform updates are announced on GitHub.</p>
+        <p>New models and platform updates are announced on GitHub.</p>
         <a class="btn ghost" href="https://github.com/ModelAtlasofTheEarth">ModelAtlasofTheEarth on GitHub</a>
       </div>
     </aside>
@@ -45,13 +47,16 @@
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=7"></script>
+<script src="mockup.js?v=9"></script>
 <script>
 (function () {
+  // The latest models use the same component as the home page of the mockup this was opened from:
+  // [container class, component class, number shown].
   var A = window.MATE;
-  document.getElementById('latest').innerHTML = A.models.slice(0, 5).map(function (m) {
-    return '<li><time>' + (m.year || '') + '</time><div><h3><a href="' + A.href(m) + '" style="color:inherit;text-decoration:none">' + A.esc(m.title) + '</a></h3><p>' + A.esc(A.who(m)) + '</p></div></li>';
-  }).join('');
+  var style = { 1: ['grid', 'card', 3], 2: ['strip-track', 'slide', 6], 3: ['rows', 'rowcard', 4], 4: ['grid', 'card', 4] }[A.layout];
+  var latest = document.getElementById('latest');
+  latest.className = style[0];
+  latest.innerHTML = A.models.slice(0, style[2]).map(function (m) { return A.tile(style[1], m); }).join('');
 })();
 </script>
 </body>

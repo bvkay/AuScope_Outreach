@@ -6,7 +6,9 @@ discussion is over.
 
 Open `index.html`. A dark bar at the top of every page switches between the options:
 
-- **1 to 4**: four home-page layouts, in AuScope styling, with a choice of footer.
+- **1 to 4**: four home-page layouts, in AuScope styling. News, About and Team follow the layout
+  of the mockup they are opened from.
+- **6**: mockup 1 with a topic menu beside the search box in place of the topic buttons.
 - **5**: a model page with a 3D viewer that runs in the browser. Three pilot models:
   Vulcan (3D inversion), Sunda megathrust (3D Underworld) and oceanic detachment faults
   (2D ASPECT, with time steps).
@@ -20,7 +22,8 @@ Open `index.html`. A dark bar at the top of every page switches between the opti
 - Vulcan: the Vulcan 2022 Level 3 Model 1 record (DOI 10.25914/arwp-q219), reduced for viewing.
 - Logos belong to AuScope, NCRIS and NCI.
 
-`tools/` holds the scripts that made the viewer copies. Each one checks its own output and says
-in its header what would make that check fail.
+`tools/` holds the scripts that made the viewer copies, thumbnails and fit file. Each one checks
+its own output and says in its header what would make that check fail; `tools/NOTES.md` keeps
+the history behind those checks.
 
 Prepared by Ben Kay.

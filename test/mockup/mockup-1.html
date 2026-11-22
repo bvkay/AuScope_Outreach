@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>M@TE mockup 1 — featured + grid</title>
-<link rel="stylesheet" href="mockup.css?v=6">
+<link rel="stylesheet" href="mockup.css?v=7">
 </head>
 <body data-variant="1">
 <!-- Mockup 1: latest model shown large and static, then every model in a card grid. -->
@@ -44,7 +44,7 @@
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=7"></script>
+<script src="mockup.js?v=9"></script>
 <script>
 (function () {
   var A = window.MATE, M = A.models, esc = A.esc;
@@ -61,7 +61,7 @@
     '<p class="doi">doi:' + esc(newest.doi) + '</p>' +
     '<p class="cta"><a class="btn" href="' + A.href(newest) + '">View model</a></p></div>';
 
-  // only topics shared by more than one model are useful as filters
+  // Only topics shared by more than one model are useful as filters.
   var shared = Object.keys(A.topics).filter(function (k) { return A.topics[k] > 1; }).sort();
   var active = '', chips = document.getElementById('chips');
   chips.innerHTML = shared.map(function (k) {
@@ -79,11 +79,8 @@
   function draw() {
     var rows = A.find(q.value, active ? [active] : [], [], sort.value);
     document.getElementById('count').textContent = rows.length + ' of ' + M.length + ' shown';
-    document.getElementById('grid').innerHTML = rows.length ? rows.map(function (m) {
-      return '<a class="card" href="' + A.href(m) + '"><div class="thumb">' + A.img(m, true) + '</div>' +
-        '<div class="body">' + A.byline(m) + '<h3>' + esc(m.title) + '</h3>' + A.tags(m, 3) +
-        '<p class="doi">doi:' + esc(m.doi) + '</p></div></a>';
-    }).join('') : '<p class="empty" style="grid-column:1/-1">No models match that search.</p>';
+    document.getElementById('grid').innerHTML = rows.length ?
+      rows.map(function (m) { return A.tile('card', m); }).join('') : '<p class="empty">No models match that search.</p>';
   }
   draw();
 })();

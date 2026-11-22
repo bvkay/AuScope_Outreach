@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="logos/auscope-icon-colour.png">
 <title>M@TE mockup 2 — scrolling strip + list</title>
-<link rel="stylesheet" href="mockup.css?v=6">
+<link rel="stylesheet" href="mockup.css?v=7">
 </head>
 <body data-variant="2">
 <!-- Mockup 2: a scrolling strip of every model (the pictures), then a compact list (the catalogue). -->
@@ -52,17 +52,14 @@
 </main>
 
 <script src="data.js"></script>
-<script src="mockup.js?v=7"></script>
+<script src="mockup.js?v=9"></script>
 <script>
 (function () {
   var A = window.MATE, M = A.models, esc = A.esc;
 
-  // ── Scrolling strip: native horizontal scroll with snap, so touch, trackpad and keyboard all work.
+  // Scrolling strip: native horizontal scroll with snap, so touch, trackpad and keyboard all work.
   var track = document.getElementById('track');
-  track.innerHTML = M.map(function (m) {
-    return '<a class="slide" href="' + A.href(m) + '"><div class="thumb">' + A.img(m) + '</div>' +
-      '<div class="body">' + A.byline(m) + '<h3>' + esc(m.title) + '</h3></div></a>';
-  }).join('');
+  track.innerHTML = M.map(function (m) { return A.tile('slide', m); }).join('');
   var step = function () { var s = track.querySelector('.slide'); return s ? s.getBoundingClientRect().width + 16 : 320; };
   var move = function (dir) {
     var end = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
@@ -86,7 +83,7 @@
   strip.addEventListener('focusout', function () { hover = false; });
   setInterval(function () { if (!paused && !hover && !document.hidden) move(1); }, 4000);
 
-  // ── Compact list
+  // Compact list.
   var q = document.getElementById('q'), sort = document.getElementById('sort');
   q.addEventListener('input', draw); sort.addEventListener('change', draw);
   function draw() {
