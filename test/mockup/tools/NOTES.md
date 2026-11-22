@@ -3,7 +3,7 @@
 Why some checks and choices are the way they are. Each script's own header states what it does
 and what would make its check fail; this file keeps the history behind them.
 
-## make_volume.py: mismatch is measured by volume, not by cell count
+## make_vti.py: mismatch is measured by volume, not by cell count
 
 20 Nov 2026, Vulcan 2022 Model 1. The first criterion was "no more than 5 % of cells differ" and
 it failed at 7.4 %. The cause is real, not a bug: 97 of the model's 134 layers are thinner than

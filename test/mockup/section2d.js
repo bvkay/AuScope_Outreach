@@ -476,7 +476,7 @@ window.MATESection = (() => {
      */
     load_(panel, index) {
       const {times} = this.scene_;
-      const stem = times ? panel.field.stem.replace('{t}', times[index].id) : panel.field.stem;
+      const stem = times ? panel.field.volume.replace('{t}', times[index].id) : panel.field.volume;
       if (!this.volumes_.has(stem)) {
         const request = fetchVolume(stem);
         request.catch(() => this.volumes_.delete(stem));   // a failed load may be tried again

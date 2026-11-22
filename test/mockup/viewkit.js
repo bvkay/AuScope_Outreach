@@ -2,14 +2,15 @@
  * @fileoverview What the model viewers share: reading volumes, the value conversions, colour
  * ramps and number formatting. Used by viewer3d.js (3D models) and section2d.js (2D sections).
  *
- * A volume is a .json header and a .u16 file of 16-bit values, written by the scripts in tools/.
+ * A volume is either one VTK ImageData file (.vti) holding stored values as floats, or a .json
+ * header and a .u16 file of 16-bit values. Both are written by the scripts in tools/.
  * Three kinds of value are used throughout:
  *   - physical: what the visitor reads and types, such as 100 ohm metres;
  *   - stored:   the physical value, or its log10 for fields stored as logs;
  *   - raw:      the 16-bit number in the file. 0 means "no value"; 1 to 65535 span the stored
  *               range given in the volume's header.
  *
- * Needs the vtk.js global, for its named colour ramps only.
+ * Needs the vtk.js global, for its named colour ramps and its .vti reader.
  */
 window.MATEKit = (() => {
   'use strict';
@@ -18,6 +19,9 @@ window.MATEKit = (() => {
   const RAW_MAX = 65535;
   /** Least space between two numbers under the colour legend, in pixels. */
   const LABEL_GAP_PX = 6;
+  const M_PER_KM = 1000;
+  /** Ending of a volume name that is one VTK ImageData file. */
+  const VTI_ENDING = '.vti';
 
   /**
    * @typedef {{dims: !Array<number>, spacing_km: !Array<number>, extent_km: !Array<number>,
@@ -57,12 +61,12 @@ window.MATEKit = (() => {
   };
 
   /**
-   * Reads one volume.
+   * Reads one volume from its .json header and .u16 values.
    * @param {string} stem File name without extension, inside volumes/.
    * @return {!Promise<{meta: !VolumeMeta, raw: !Uint16Array}>} Its header and raw values.
    * @throws {Error} If a file is missing or its size does not match the header.
    */
-  const fetchVolume = async (stem) => {
+  const fetchU16 = async (stem) => {
     const meta = /** @type {!VolumeMeta} */ (await fetchJson(`volumes/${stem}.json`));
     const response = await fetch(`volumes/${stem}.u16`);
     if (!response.ok) throw new Error(`volumes/${stem}.u16 could not be loaded (${response.status})`);
@@ -73,6 +77,66 @@ window.MATEKit = (() => {
     }
     return {meta, raw};
   };
+
+  /**
+   * Reads one volume from a VTK ImageData file. The file holds stored values as floats, NaN
+   * where there is no value, on a grid measured in metres. The raw values are made here, over
+   * the file's own range widened to one decimal place.
+   * @param {string} file File name, inside volumes/.
+   * @return {!Promise<{meta: !VolumeMeta, raw: !Uint16Array}>} Its header and raw values.
+   * @throws {Error} If the file is missing or holds no values.
+   */
+  const fetchVti = async (file) => {
+    const response = await fetch(`volumes/${file}`);
+    if (!response.ok) throw new Error(`volumes/${file} could not be loaded (${response.status})`);
+    const reader = vtk.IO.XML.vtkXMLImageDataReader.newInstance();
+    reader.parseAsArrayBuffer(await response.arrayBuffer());
+    const image = reader.getOutputData(0);
+    const array = image && (image.getPointData().getScalars() || image.getPointData().getArrayByIndex(0));
+    if (!array) throw new Error(`volumes/${file} holds no values`);
+    const values = array.getData();
+    const dims = image.getDimensions();
+    const spacingKm = image.getSpacing().map((metres) => metres / M_PER_KM);
+
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let n = 0; n < values.length; n++) {
+      const v = values[n];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (lo > hi) throw new Error(`volumes/${file} holds no values`);
+    lo = Math.floor(lo * 10) / 10;
+    hi = Math.ceil(hi * 10) / 10;
+
+    const raw = new Uint16Array(values.length);
+    const steps = (RAW_MAX - 1) / (hi - lo);
+    for (let n = 0; n < values.length; n++) {
+      const v = values[n];
+      // NaN fails this comparison and stays 0, which means "no value".
+      if (v === v) raw[n] = 1 + Math.round((v - lo) * steps);
+    }
+    const meta = /** @type {!VolumeMeta} */ ({
+      dims: dims.slice(),
+      spacing_km: spacingKm,
+      extent_km: spacingKm.map((size, axis) => size * (dims[axis] - 1)),
+      scale: {lo, hi},
+    });
+    return {meta, raw};
+  };
+
+  /**
+   * @param {string} name A volume name from a scene.
+   * @return {boolean} True if the name is one .vti file and not the stem of a .json and .u16 pair.
+   */
+  const isVti = (name) => name.endsWith(VTI_ENDING);
+
+  /**
+   * Reads one volume.
+   * @param {string} name Inside volumes/: a .vti file name, or the stem of a .json and .u16 pair.
+   * @return {!Promise<{meta: !VolumeMeta, raw: !Uint16Array}>} Its header and raw values.
+   */
+  const fetchVolume = (name) => (isVti(name) ? fetchVti(name) : fetchU16(name));
 
   /**
    * Formats a number to three significant figures, in exponent form when very large or small.
@@ -216,5 +280,5 @@ window.MATEKit = (() => {
     }
   }
 
-  return {RAW_MAX, esc, fetchJson, fetchVolume, formatNumber, dropCrowdedLabels, niceTicks, rampStops, ValueScale};
+  return {RAW_MAX, esc, fetchJson, fetchVolume, isVti, formatNumber, dropCrowdedLabels, niceTicks, rampStops, ValueScale};
 })();

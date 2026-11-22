@@ -16,7 +16,7 @@
    {
     "label": "Resistivity",
     "unit": "Ω·m",
-    "stem": "vulcan-2022-model1",
+    "volume": "vulcan-2022-model1.vti",
     "vmin": 1,
     "vmax": 1000,
     "cmap": "ryb",
@@ -162,7 +162,7 @@
    {
     "label": "Viscosity",
     "unit": "model units",
-    "stem": "sunda-viscosity",
+    "volume": "sunda-viscosity",
     "cmap": "Viridis (matplotlib)",
     "solid": {
      "min": 300
@@ -171,7 +171,7 @@
    {
     "label": "Strain rate (second invariant)",
     "unit": "model units",
-    "stem": "sunda-strainrate",
+    "volume": "sunda-strainrate",
     "cmap": "Inferno (matplotlib)",
     "solid": {
      "min": 3e-05
@@ -290,7 +290,7 @@
    {
     "label": "Plastic strain",
     "unit": "",
-    "stem": "detachment-plastic_strain-{t}",
+    "volume": "detachment-plastic_strain-{t}",
     "vmin": 0,
     "vmax": 6,
     "cmap": "Inferno (matplotlib)",
@@ -299,19 +299,19 @@
    {
     "label": "Strain rate",
     "unit": "1/s",
-    "stem": "detachment-strain_rate-{t}",
+    "volume": "detachment-strain_rate-{t}",
     "cmap": "Inferno (matplotlib)"
    },
    {
     "label": "Viscosity",
     "unit": "Pa s",
-    "stem": "detachment-viscosity-{t}",
+    "volume": "detachment-viscosity-{t}",
     "cmap": "Viridis (matplotlib)"
    },
    {
     "label": "Temperature",
     "unit": "K",
-    "stem": "detachment-T-{t}",
+    "volume": "detachment-T-{t}",
     "cmap": "ryb",
     "reverse": true
    }

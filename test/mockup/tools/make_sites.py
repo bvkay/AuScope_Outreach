@@ -1,7 +1,7 @@
 """Writes the MT site positions for the 3D viewer, in the viewer's local kilometres.
 
 Usage (needs pyproj):
-    python make_sites.py <folder of .edi files> <volume .json from make_volume.py> <out .json>
+    python make_sites.py <folder of .edi files> <model .vti from make_vti.py> <out .json>
 
 Positions come from the >HEAD LAT and LONG lines (degrees:minutes:seconds). The decimal LATITUDE
 in the >INFO block is not used; NOTES.md records why.
@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ElementTree
 
 from pyproj import Transformer
 
@@ -24,6 +25,7 @@ GEOGRAPHIC = "EPSG:4326"
 MODEL_CRS = "EPSG:32753"    # UTM zone 53 south, the Vulcan model's grid
 HEADER_BYTES = 4000
 MIN_FRACTION_INSIDE = 0.9
+M_PER_KM = 1000
 
 
 def dms_to_degrees(text: str) -> float:
@@ -85,6 +87,24 @@ def read_sites(edi_dir: str, origin_m: tuple[float, float]) -> list[dict]:
     return sites
 
 
+def read_footprint(path: str) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Reads the horizontal position and size of a model volume from its .vti header.
+
+    Args:
+        path: The .vti file.
+
+    Returns:
+        The south-west corner (easting, northing) in metres, and the extent (east, north) in
+        kilometres.
+    """
+    image = ElementTree.parse(path).getroot().find("ImageData")
+    origin = [float(value) for value in image.get("Origin").split()]
+    spacing = [float(value) for value in image.get("Spacing").split()]
+    extent = [int(value) for value in image.get("WholeExtent").split()]
+    size_km = [(extent[2 * axis + 1] - extent[2 * axis]) * spacing[axis] / M_PER_KM for axis in (0, 1)]
+    return (origin[0], origin[1]), (size_km[0], size_km[1])
+
+
 def main() -> int:
     """Runs the script.
 
@@ -93,14 +113,11 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("edi_dir", help="folder of .edi files")
-    parser.add_argument("volume_json", help="volume header written by make_volume.py")
+    parser.add_argument("volume_vti", help="model volume written by make_vti.py")
     parser.add_argument("out", help="output .json")
     args = parser.parse_args()
 
-    with open(args.volume_json) as handle:
-        meta = json.load(handle)
-    x0, y0, _ = meta["origin_utm_m"]
-    extent_x, extent_y, _ = meta["extent_km"]
+    (x0, y0), (extent_x, extent_y) = read_footprint(args.volume_vti)
     sites = read_sites(args.edi_dir, (x0, y0))
     if not sites:
         raise SystemExit(f"no .edi files in {args.edi_dir}")

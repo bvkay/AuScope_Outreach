@@ -13,6 +13,7 @@ Open `index.html`. A dark bar at the top of every page switches between the opti
   Vulcan (3D inversion), Sunda megathrust (3D Underworld) and oceanic detachment faults
   (2D ASPECT, with time steps). The 3D models use `viewer3d.js`; the 2D model shows every
   field as its own panel, one above the other, with `section2d.js`. Both share `viewkit.js`.
+  The Vulcan viewer copy is a VTK ImageData file (`.vti`), which ParaView also opens.
 
 ## Where the content comes from
 

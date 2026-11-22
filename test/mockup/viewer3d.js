@@ -3,9 +3,9 @@
  * model-3d.html?scene=<name>.
  *
  * A scene (volumes/scenes.json) lists a model's fields, time steps, sites and saved views. Each
- * field and time step is a small uniform volume written by the scripts in tools/: a .json header
- * and a .u16 file of 16-bit values. A scene whose volumes are one cell thick is a 2D section and is
- * handed to section2d.js.
+ * field and time step is a small uniform volume written by the scripts in tools/: one .vti file, or
+ * a .json header and a .u16 file of 16-bit values. A scene whose volumes are one cell thick is a 2D
+ * section and is handed to section2d.js.
  *
  * Three kinds of value are used throughout:
  *   - physical: what the visitor reads and types, such as 100 ohm metres;
@@ -30,8 +30,10 @@
   const {vtkOrientationMarkerWidget} = vtk.Interaction.Widgets;
   const {vtkInteractorStyleManipulator} = vtk.Interaction.Style;
   const Manipulators = vtk.Interaction.Manipulators;
-  const {RAW_MAX, esc, fetchJson, fetchVolume, formatNumber, dropCrowdedLabels, niceTicks, rampStops, ValueScale} = window.MATEKit;
+  const {RAW_MAX, esc, fetchJson, fetchVolume, isVti, formatNumber, dropCrowdedLabels, niceTicks, rampStops, ValueScale} = window.MATEKit;
 
+  /** Raised when scenes.json changes shape, so browsers do not reuse an old copy. */
+  const SCENES_VERSION = 2;
   /** Marks a voxel as outside the solid body. */
   const OUTSIDE = -1e9;
   /** Most extra surfaces a visitor may ask for. */
@@ -139,25 +141,25 @@
     }
 
     /**
-     * @param {string} stem File name without extension, inside volumes/.
+     * @param {string} name Volume name from the scene, inside volumes/.
      * @return {!Promise<!Volume>} The volume. A request already under way is shared.
      */
-    load(stem) {
-      if (!this.loading_.has(stem)) {
-        const request = VolumeStore.fetch_(stem);
-        request.catch(() => this.loading_.delete(stem));   // a failed load may be tried again
-        this.loading_.set(stem, request);
+    load(name) {
+      if (!this.loading_.has(name)) {
+        const request = VolumeStore.fetch_(name);
+        request.catch(() => this.loading_.delete(name));   // a failed load may be tried again
+        this.loading_.set(name, request);
       }
-      return this.loading_.get(stem);
+      return this.loading_.get(name);
     }
 
     /**
-     * @param {string} stem File name without extension.
+     * @param {string} name Volume name from the scene.
      * @return {!Promise<!Volume>} The volume, with "no value" voxels prepared for drawing.
      * @private
      */
-    static async fetch_(stem) {
-      const {meta, raw} = await fetchVolume(stem);
+    static async fetch_(name) {
+      const {meta, raw} = await fetchVolume(name);
       // Remember where there is no value (above the ground surface), then draw those voxels as
       // the top of the scale so slices are not left with holes.
       let gap = null;
@@ -1316,12 +1318,12 @@
     }
 
     /**
-     * @return {string} File stem of the field and time step on show.
+     * @return {string} Volume name of the field and time step on show.
      * @private
      */
-    stem_() {
+    name_() {
       const field = this.scene_.fields[this.field_];
-      return this.scene_.times ? field.stem.replace('{t}', this.scene_.times[this.time_].id) : field.stem;
+      return this.scene_.times ? field.volume.replace('{t}', this.scene_.times[this.time_].id) : field.volume;
     }
 
     /**
@@ -1704,7 +1706,7 @@
       const request = ++this.request_;
       $('busy').hidden = false;
       try {
-        const volume = await this.store_.load(this.stem_());
+        const volume = await this.store_.load(this.name_());
         if (request !== this.request_) return;      // a newer request has taken over
         this.stage_.setVolume(volume);
         this.useField_(keepLimits);
@@ -1932,7 +1934,7 @@
     const message = $('msg');
     try {
       const name = (location.search.match(/[?&]scene=([\w-]+)/) || [])[1] || 'vulcan';
-      const [scenes, records] = await Promise.all([fetchJson('volumes/scenes.json'), fetchJson('volumes/records.json')]);
+      const [scenes, records] = await Promise.all([fetchJson(`volumes/scenes.json?v=${SCENES_VERSION}`), fetchJson('volumes/records.json')]);
       const scene = scenes[name];
       if (!scene) throw new Error(`unknown scene "${name}"`);
       if (!scene.fields || !scene.fields.length) throw new Error(`scene "${name}" lists no fields`);
@@ -1940,9 +1942,10 @@
       renderRecord(scene, records[name], name);
 
       const first = scene.fields[0];
-      const firstStem = scene.times ? first.stem.replace('{t}', scene.times[scene.times.length - 1].id) : first.stem;
-      const header = await fetchJson(`volumes/${firstStem}.json`);
-      if (header.dims[1] === 1) {
+      const firstName = scene.times ? first.volume.replace('{t}', scene.times[scene.times.length - 1].id) : first.volume;
+      // A .vti volume is always 3D here, and has no separate header to ask.
+      const header = isVti(firstName) ? null : await fetchJson(`volumes/${firstName}.json`);
+      if (header && header.dims[1] === 1) {
         // One cell thick: a 2D section, which has its own viewer.
         await window.MATESection.open({scene, mount: document.querySelector('.app')});
         message.remove();
@@ -1951,7 +1954,7 @@
 
       const store = new VolumeStore();
       const [volume, siteFile] = await Promise.all([
-        store.load(firstStem),
+        store.load(firstName),
         scene.sites ? fetchJson(`volumes/${scene.sites}`) : null,
       ]);
       const sites = siteFile ? siteFile.sites : null;

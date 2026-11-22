@@ -1,4 +1,4 @@
-"""Shared reading and writing of viewer volumes.
+"""Shared reading and writing of the two-file viewer volumes (Underworld and ASPECT models).
 
 A viewer volume is two files: <stem>.u16 holds unsigned 16-bit values, x fastest, then y, then z;
 <stem>.json describes the grid and how the values are scaled. Raw 0 means "no value"; raw 1 to
