@@ -27,6 +27,8 @@
   const {vtkDataArray} = vtk.Common.Core;
   const {vtkImageMarchingCubes, vtkOutlineFilter} = vtk.Filters.General;
   const {vtkOrientationMarkerWidget} = vtk.Interaction.Widgets;
+  const {vtkInteractorStyleManipulator} = vtk.Interaction.Style;
+  const Manipulators = vtk.Interaction.Manipulators;
 
   /** Largest raw value; also what "no value" voxels of a 3D volume are redrawn as. */
   const RAW_MAX = 65535;
@@ -42,6 +44,8 @@
   const PICK_RADIUS_PX = 14;
   /** Pointer travel beyond which a press counts as a drag, not a click, in CSS pixels. */
   const CLICK_SLOP_PX = 4;
+  /** Steepest the view may tilt above or below level, in degrees; short of 90 so up stays up. */
+  const MAX_TILT_DEG = 89;
   /** Time between steps while playing, in milliseconds. */
   const PLAY_INTERVAL_MS = 900;
 
@@ -240,6 +244,65 @@
   }
 
   /**
+   * Builds the left-drag handler that turns the model like a turntable.
+   *
+   * The camera circles the point it looks at: sideways travel turns it about the vertical
+   * axis, vertical travel tilts it, stopping just short of straight down and straight up. Up
+   * therefore never rolls or flips, which the library's own rotation allows.
+   *
+   * @return {!Object} A vtk.js mouse manipulator for the left button.
+   */
+  const turntable = () => {
+    let last = null;
+    const no = () => false;
+    const nothing = () => {};
+    // The methods vtkInteractorStyleManipulator calls on a mouse manipulator.
+    const manipulator = {
+      getButton: () => 1,
+      getShift: no,
+      getControl: no,
+      getAlt: no,
+      isDragEnabled: () => true,
+      isScrollEnabled: no,
+      startInteraction: nothing,
+      endInteraction: nothing,
+      onButtonDown: (interactor, renderer, position) => { last = position; },
+      onButtonUp: () => { last = null; },
+    };
+    manipulator.onMouseMove = (interactor, renderer, position) => {
+      if (!last || !position) return;
+      const camera = renderer.getActiveCamera();
+      const focus = camera.getFocalPoint();
+      const eye = camera.getPosition();
+      const offset = [eye[0] - focus[0], eye[1] - focus[1], eye[2] - focus[2]];
+      const distance = Math.hypot(...offset);
+      const level = Math.hypot(offset[0], offset[1]);
+      const toDegrees = 180 / Math.PI;
+      let tilt = Math.asin(offset[2] / distance) * toDegrees;
+      let bearing = Math.atan2(offset[1], offset[0]);
+      if (level < 1e-6 * distance) {
+        // Looking straight down or up, the bearing comes from which way the picture's top points.
+        const up = camera.getViewUp();
+        const sign = offset[2] > 0 ? -1 : 1;
+        bearing = Math.atan2(sign * up[1], sign * up[0]);
+      }
+      const degreesPerPixel = 180 / interactor.getView().getViewportSize(renderer)[1];
+      bearing -= (position.x - last.x) * degreesPerPixel / toDegrees;
+      tilt -= (position.y - last.y) * degreesPerPixel;
+      tilt = Math.max(-MAX_TILT_DEG, Math.min(MAX_TILT_DEG, tilt)) / toDegrees;
+      last = position;
+      camera.setPosition(
+          focus[0] + distance * Math.cos(tilt) * Math.cos(bearing),
+          focus[1] + distance * Math.cos(tilt) * Math.sin(bearing),
+          focus[2] + distance * Math.sin(tilt));
+      camera.setViewUp(0, 0, 1);
+      renderer.resetCameraClippingRange();
+      interactor.render();
+    };
+    return manipulator;
+  };
+
+  /**
    * The render window and the part of the model on show. Every other part draws from it.
    *
    * Cutting in from a side shrinks the crop box; slices, solid, surfaces and axes all follow.
@@ -290,11 +353,35 @@
       /** @private @const {!Set<!Object>} Actors that stretch with the exaggeration. */
       this.scaled_ = new Set();
 
+      this.useTurntableControls_(container);
       this.setVolume(volume);
       new ResizeObserver(() => {
         this.window.resize();
         this.render();
       }).observe(container);
+    }
+
+    /**
+     * Sets what the mouse and fingers do: drag turns the model about its vertical axis and
+     * tilts it without ever rolling it, right-drag or Shift-drag moves it, and the wheel or a
+     * pinch zooms.
+     * @param {!HTMLElement} container Element the picture is drawn into.
+     * @private
+     */
+    useTurntableControls_(container) {
+      const style = vtkInteractorStyleManipulator.newInstance();
+      const pan = Manipulators.vtkMouseCameraTrackballPanManipulator;
+      const zoom = Manipulators.vtkMouseCameraTrackballZoomManipulator.newInstance({
+        scrollEnabled: true, dragEnabled: false,
+      });
+      style.addMouseManipulator(turntable());
+      style.addMouseManipulator(pan.newInstance({button: 3}));
+      style.addMouseManipulator(pan.newInstance({button: 2}));
+      style.addMouseManipulator(pan.newInstance({button: 1, shift: true}));
+      style.addMouseManipulator(zoom);
+      style.addGestureManipulator(Manipulators.vtkGestureCameraManipulator.newInstance());
+      this.window.getInteractor().setInteractorStyle(style);
+      container.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
     /** @return {!Crop} The crop box of the whole model. */
@@ -1113,8 +1200,10 @@
         fontSizeScale: (resolution) => resolution / 2.4,
         faceColor: '#282572', faceRotation: 0, edgeThickness: 0.08, edgeColor: 'white', resolution: 300,
       });
-      this.cube_.setXPlusFaceProperty({text: labels[0]});
-      this.cube_.setXMinusFaceProperty({text: labels[1]});
+      // The library draws the east and west faces with their text lying on its side, so those
+      // two are turned to read upright like the others.
+      this.cube_.setXPlusFaceProperty({text: labels[0], faceRotation: 90});
+      this.cube_.setXMinusFaceProperty({text: labels[1], faceRotation: 270});
       this.cube_.setYPlusFaceProperty({text: labels[2]});
       this.cube_.setYMinusFaceProperty({text: labels[3]});
       this.cube_.setZPlusFaceProperty({text: 'UP', faceColor: '#3F88C8'});
@@ -1483,6 +1572,7 @@
         this.camera_.current = null;
         this.markView_();
       });
+      $('view').addEventListener('dblclick', () => stage.reframe());
 
       on(['preset'], 'change', () => this.applyPreset_());
       on(['to-defaults'], 'click', () => {
