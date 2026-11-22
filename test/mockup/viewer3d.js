@@ -1,595 +1,2007 @@
-/* Model viewer for the mockup. One page, many models: model-3d.html?scene=<name>.
-   A scene (volumes/scenes.json) lists the model's fields and time steps; each is a small uniform
-   volume made by the scripts in tools/. A volume whose middle dimension is 1 is a 2D section. */
-(async function () {
-  var $ = function (id) { return document.getElementById(id); };
-  var Core = vtk.Rendering.Core, DM = vtk.Common.DataModel, msg = $('msg');
-  var show = function (id, on) { var e = $(id); if (e) e.hidden = !on; };
-  try {
-    var name = (location.search.match(/[?&]scene=([\w-]+)/) || [])[1] || 'vulcan';
-    var scenes = await (await fetch('volumes/scenes.json')).json();
-    var sc = scenes[name]; if (!sc) throw new Error('unknown scene "' + name + '"');
+/**
+ * @fileoverview Model viewer for the mockup. One page serves every model:
+ * model-3d.html?scene=<name>.
+ *
+ * A scene (volumes/scenes.json) lists a model's fields, time steps, sites and saved views. Each
+ * field and time step is a small uniform volume written by the scripts in tools/: a .json header
+ * and a .u16 file of 16-bit values. A volume whose middle dimension is 1 is a 2D section.
+ *
+ * Three kinds of value are used throughout:
+ *   - physical: what the visitor reads and types, such as 100 ohm metres;
+ *   - stored:   the physical value, or its log10 for fields stored as logs;
+ *   - raw:      the 16-bit number in the file. 0 means "no value"; 1 to 65535 span the stored
+ *               range given in the volume's header.
+ *
+ * Layout of this file: constants and helpers, then one class per part of the picture (Stage,
+ * ColourScale, Slices, Walls, SolidBody, Surfaces, BoxAxes, SiteLayer, Compass, Camera), then
+ * Viewer, which reads the page's controls and drives the parts.
+ *
+ * Needs the vtk.js global. Hands the site layer to window.MATEFit (fit.js) when the scene has a
+ * model-fit file.
+ */
+(() => {
+  'use strict';
 
-    // ── the model's full record, below the viewer ──
-    var rec = (await (await fetch('volumes/records.json')).json())[name];
-    document.title = sc.short + ' — M@TE (mockup)';
-    $('crumb').textContent = rec.slug;
-    $('title').textContent = rec.title;
-    $('byline').innerHTML = '<b>' + rec.creators.join(', ') + '</b> · ' + sc.year;
-    $('r-snapshot').innerHTML = rec.snapshot;
-    ['overview', 'model', 'meta'].forEach(function (k) { $('r-' + k).innerHTML = rec[k]; });
-    $('r-cite').innerHTML = rec.citation;
-    $('r-copy').onclick = function () { var b = this; navigator.clipboard.writeText($('r-cite').textContent).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy citation'; }, 1500); }); };
-    if (rec.data_url) $('r-get').insertAdjacentHTML('beforeend', '<a class="btn" href="' + rec.data_url + '">Model files at NCI</a>');
-    if (rec.repo) $('r-get').insertAdjacentHTML('beforeend', '<a class="btn ghost" href="' + rec.repo + '">M@TE record on GitHub</a>');
-    $('r-dois').innerHTML = rec.dois.map(function (d) { return '<div><dt>' + d.label + '</dt><dd class="mono"><a href="https://doi.org/' + d.doi + '">' + d.doi + '</a></dd></div>'; }).join('');
-    $('r-creators').innerHTML = rec.creators.map(function (c) { return '<li>' + c + '</li>'; }).join('');
-    $('tags').innerHTML = rec.tags.map(function (t) { return '<li>' + t + '</li>'; }).join('');
-    $('rtabs').addEventListener('click', function (e) {
-      var b = e.target.closest('button'); if (!b) return;
-      [].forEach.call(this.children, function (t) { t.setAttribute('aria-selected', t === b); $('r-' + t.dataset.p).hidden = t !== b; });
-    });
-    // the model links keep whichever mockup and footer you are in
-    var carry = (location.search.match(/[?&](?:v|f)=[\w]+/g) || []).map(function (p) { return '&' + p.slice(1); }).join('');
-    [].forEach.call(document.querySelectorAll('.scene-links a'), function (a) { a.href = 'model-3d.html?scene=' + a.dataset.s + carry; if (a.dataset.s === name) a.setAttribute('aria-current', 'true'); });
+  const Core = vtk.Rendering.Core;
+  const DataModel = vtk.Common.DataModel;
+  const {vtkDataArray} = vtk.Common.Core;
+  const {vtkImageMarchingCubes, vtkOutlineFilter} = vtk.Filters.General;
+  const {vtkOrientationMarkerWidget} = vtk.Interaction.Widgets;
 
-    // ── volumes: fetched on demand, kept once loaded ──
-    var cache = {};
-    var load = async function (stem) {
-      if (cache[stem]) return cache[stem];
-      var meta = await (await fetch('volumes/' + stem + '.json')).json();
-      var raw = new Uint16Array(await (await fetch('volumes/' + stem + '.u16')).arrayBuffer());
-      var gap = null;
-      if (meta.dims[1] !== 1) {
-        // 3D: 0 means "no value" (above the ground surface). Remember where, then show those
+  /** Largest raw value; also what "no value" voxels of a 3D volume are redrawn as. */
+  const RAW_MAX = 65535;
+  /** Raw values of a 2D section below this are drawn see-through, so real values are kept above it. */
+  const RAW_2D_FLOOR = 80;
+  /** Marks a voxel as outside the solid body. */
+  const OUTSIDE = -1e9;
+  /** Most extra surfaces a visitor may ask for. */
+  const MAX_SURFACES = 6;
+  /** Height above the top of the model at which sites are drawn, in km. */
+  const SITE_HEIGHT_KM = 0.05;
+  /** How close to a site a click must land to choose it, in CSS pixels. */
+  const PICK_RADIUS_PX = 14;
+  /** Pointer travel beyond which a press counts as a drag, not a click, in CSS pixels. */
+  const CLICK_SLOP_PX = 4;
+  /** Time between steps while playing, in milliseconds. */
+  const PLAY_INTERVAL_MS = 900;
+
+  /**
+   * Colour ramps defined here, as [fraction, hex] stops. Any other name is a vtk.js preset.
+   * "ryb" has red at the low end, so conductive (low resistivity) is red.
+   * @const {!Object<string, !Array<!Array<number|string>>>}
+   */
+  const RAMPS = {
+    mt: [[0, '#7a0403'], [.125, '#d93806'], [.25, '#f9a41b'], [.42, '#e8e86a'], [.54, '#7fd67f'],
+      [.71, '#2fa3d9'], [.875, '#3a4fc4'], [1, '#30123b']],
+    ryb: [[0, '#a50026'], [.125, '#d73027'], [.25, '#f46d43'], [.375, '#fdae61'], [.5, '#ffffbf'],
+      [.625, '#abd9e9'], [.75, '#74add1'], [.875, '#4575b4'], [1, '#313695']],
+  };
+
+  /**
+   * Set views as [direction from the model towards the viewer, up direction].
+   * @const {!Object<string, !Array<!Array<number>>>}
+   */
+  const VIEW_DIRECTIONS = {
+    oblique: [[-1, -1.5, 0.9], [0, 0, 1]],
+    above: [[0, 0, 1], [0, 1, 0]],
+    south: [[0, -1, 0], [0, 0, 1]],
+    north: [[0, 1, 0], [0, 0, 1]],
+    east: [[1, 0, 0], [0, 0, 1]],
+    west: [[-1, 0, 0], [0, 0, 1]],
+  };
+
+  /**
+   * Extent controls: [input id, axis (0 east, 1 north, 2 up), crop key, +1 if measured from the low end].
+   * @const {!Array<!Array<string|number>>}
+   */
+  const CUTS = [
+    ['cut-w', 0, 'i0', 1], ['cut-e', 0, 'i1', -1], ['cut-s', 1, 'j0', 1],
+    ['cut-n', 1, 'j1', -1], ['cut-b', 2, 'k0', 1], ['cut-t', 2, 'k1', -1],
+  ];
+
+  /** Compass arrow colours (east, north, up), the AusMT data colours. */
+  const ARROW_RGB = [[234, 30, 49], [89, 143, 57], [63, 136, 200]];
+
+  /**
+   * @typedef {{dims: !Array<number>, spacing_km: !Array<number>, extent_km: !Array<number>,
+   *     scale: {lo: number, hi: number}, log: (boolean|undefined), axes: (!Array<string>|undefined)}}
+   */
+  let VolumeMeta;
+
+  /**
+   * A loaded volume. gap marks the voxels with no value (3D only; null when there are none).
+   * @typedef {{meta: !VolumeMeta, raw: !Uint16Array, gap: ?Uint8Array}}
+   */
+  let Volume;
+
+  /**
+   * First and last voxel on show along each axis.
+   * @typedef {{i0: number, i1: number, j0: number, j1: number, k0: number, k1: number}}
+   */
+  let Crop;
+
+  /**
+   * @param {string} id Element id.
+   * @return {?HTMLElement} The element.
+   */
+  const $ = (id) => document.getElementById(id);
+
+  /**
+   * Escapes text for use in HTML.
+   * @param {*} text Value to escape.
+   * @return {string} The escaped text.
+   */
+  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+  /**
+   * Shows or hides an element, if the page has it.
+   * @param {string} id Element id.
+   * @param {boolean} on Whether to show it.
+   */
+  const show = (id, on) => {
+    const element = $(id);
+    if (element) element.hidden = !on;
+  };
+
+  /**
+   * Fetches a JSON file.
+   * @param {string} url Address of the file.
+   * @return {!Promise<*>} The parsed content.
+   * @throws {Error} If the server does not return the file.
+   */
+  const fetchJson = async (url) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url} could not be loaded (${response.status})`);
+    return response.json();
+  };
+
+  /**
+   * Formats a number to three significant figures, in exponent form when very large or small.
+   * @param {number} v The number.
+   * @return {string} The text.
+   */
+  const formatNumber = (v) => {
+    const size = Math.abs(v);
+    return (size !== 0 && (size >= 1e5 || size < 1e-2)) ? v.toExponential(1) : String(+v.toPrecision(3));
+  };
+
+  /**
+   * Picks round tick values across a range, aiming for about three steps.
+   * @param {number} a Low end.
+   * @param {number} b High end.
+   * @return {!Array<number>} Tick values within the range.
+   */
+  const niceTicks = (a, b) => {
+    const rough = (b - a) / 3;
+    let step = Math.pow(10, Math.floor(Math.log10(rough)));
+    const ratio = rough / step;
+    step *= ratio >= 5 ? 5 : ratio >= 2 ? 2 : 1;
+    const ticks = [];
+    for (let t = Math.ceil(a / step - 1e-9) * step; t <= b + 1e-9; t += step) ticks.push(+t.toPrecision(12));
+    return ticks;
+  };
+
+  /**
+   * @param {string} hex Colour as "#rrggbb".
+   * @return {!Array<number>} Red, green and blue, each 0 to 1.
+   */
+  const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.substr(i, 2), 16) / 255);
+
+  /**
+   * Splits typed text into numbers.
+   * @param {string} text Values separated by commas, semicolons or spaces.
+   * @return {!Array<number>} The values; NaN where an entry is not a number.
+   */
+  const parseNumberList = (text) => text.split(/[,;\s]+/).filter(Boolean).map(Number);
+
+  /**
+   * @param {string} name Scalar array name.
+   * @param {!ArrayBufferView} values The values.
+   * @param {number} components Values per point.
+   * @return {!Object} A vtkDataArray.
+   */
+  const dataArray = (name, values, components) => vtkDataArray.newInstance({name, values, numberOfComponents: components});
+
+  /**
+   * Loads volumes on demand and keeps them.
+   */
+  class VolumeStore {
+    constructor() {
+      /** @private @const {!Map<string, !Promise<!Volume>>} */
+      this.loading_ = new Map();
+    }
+
+    /**
+     * @param {string} stem File name without extension, inside volumes/.
+     * @return {!Promise<!Volume>} The volume. A request already under way is shared.
+     */
+    load(stem) {
+      if (!this.loading_.has(stem)) {
+        const request = VolumeStore.fetch_(stem);
+        request.catch(() => this.loading_.delete(stem));   // a failed load may be tried again
+        this.loading_.set(stem, request);
+      }
+      return this.loading_.get(stem);
+    }
+
+    /**
+     * @param {string} stem File name without extension.
+     * @return {!Promise<!Volume>} The volume, with "no value" voxels prepared for drawing.
+     * @private
+     */
+    static async fetch_(stem) {
+      const meta = /** @type {!VolumeMeta} */ (await fetchJson(`volumes/${stem}.json`));
+      const response = await fetch(`volumes/${stem}.u16`);
+      if (!response.ok) throw new Error(`volumes/${stem}.u16 could not be loaded (${response.status})`);
+      const raw = new Uint16Array(await response.arrayBuffer());
+      const [nx, ny, nz] = meta.dims;
+      if (raw.length !== nx * ny * nz) {
+        throw new Error(`${stem}: ${raw.length} values, but the header says ${nx} × ${ny} × ${nz}`);
+      }
+      let gap = null;
+      if (ny !== 1) {
+        // 3D: remember where there is no value (above the ground surface), then draw those
         // voxels as the top of the scale so slices are not left with holes.
-        for (var n = 0; n < raw.length; n++) if (raw[n] === 0) { if (!gap) gap = new Uint8Array(raw.length); gap[n] = 1; raw[n] = 65535; }
+        for (let n = 0; n < raw.length; n++) {
+          if (raw[n] !== 0) continue;
+          if (!gap) gap = new Uint8Array(raw.length);
+          gap[n] = 1;
+          raw[n] = RAW_MAX;
+        }
       } else {
-        // 2D: gaps stay 0 and are drawn see-through. The cut-off is not sharp, so real values are
-        // kept clear of it (raw 80 of 65535 = 0.1 % of the range).
-        for (var k = 0; k < raw.length; k++) if (raw[k] !== 0 && raw[k] < 80) raw[k] = 80;
+        // 2D: gaps stay 0 and are drawn see-through. That cut-off is not sharp, so real values
+        // are kept clear of it (80 of 65535 is 0.1 % of the range).
+        for (let n = 0; n < raw.length; n++) {
+          if (raw[n] !== 0 && raw[n] < RAW_2D_FLOOR) raw[n] = RAW_2D_FLOOR;
+        }
       }
-      return (cache[stem] = { meta: meta, raw: raw, gap: gap });
-    };
-    var fi = 0, ti = sc.times ? sc.times.length - 1 : 0;
-    var stemOf = function () { var f = sc.fields[fi]; return sc.times ? f.stem.replace('{t}', sc.times[ti].id) : f.stem; };
-    var vol = await load(stemOf()), meta = vol.meta;
-    var nx = meta.dims[0], ny = meta.dims[1], nz = meta.dims[2], sp = meta.spacing_km, is2d = ny === 1;
-    var axisNames = meta.axes || ['East (km)', 'North (km)', 'Depth (km)'];
-    var lo, hi, isLog, unit;
-    var toRaw = function (stored) { return 1 + (stored - lo) / (hi - lo) * 65534; };
-    var toStored = function (phys) { return isLog ? Math.log10(phys) : phys; };
-    var toPhys = function (stored) { return isLog ? Math.pow(10, stored) : stored; };
-    var fmt = function (v) { var a = Math.abs(v); return (a !== 0 && (a >= 1e5 || a < 1e-2)) ? v.toExponential(1) : String(+v.toPrecision(3)); };
-    var physOk = function (v) { return isFinite(v) && (!isLog || v > 0); };
+      return {meta, raw, gap};
+    }
+  }
 
-    var image = DM.vtkImageData.newInstance();
-    image.setSpacing(sp[0], is2d ? 1 : sp[1], sp[2]);    // kilometres
-    // The part of the model on show, as first and last voxel along each axis. Cutting in from a
-    // side shrinks this box, and everything (slices, solid, surfaces, axes) is drawn from it.
-    var cr = { i0: 0, i1: nx - 1, j0: 0, j1: ny - 1, k0: 0, k1: nz - 1 }, cx, cy, cz, B, C, curRaw = vol.raw;
-    var setData = function (raw) {
-      curRaw = raw;
-      cx = cr.i1 - cr.i0 + 1; cy = cr.j1 - cr.j0 + 1; cz = cr.k1 - cr.k0 + 1;
-      var sub = raw;
+  /**
+   * The render window and the part of the model on show. Every other part draws from it.
+   *
+   * Cutting in from a side shrinks the crop box; slices, solid, surfaces and axes all follow.
+   * Vertical exaggeration stretches every registered actor upward.
+   */
+  class Stage {
+    /**
+     * @param {!HTMLElement} container Element the picture is drawn into.
+     * @param {!Volume} volume First volume; fixes the grid for the scene.
+     */
+    constructor(container, volume) {
+      const {meta} = volume;
+      /** @const {!Array<number>} Voxels along east, north and up. */
+      this.dims = meta.dims.slice();
+      /** @const {!Array<number>} Voxel size in km. */
+      this.spacing = meta.spacing_km.slice();
+      /** @const {number} Height of the whole model in km. */
+      this.depthKm = meta.extent_km[2];
+      /** @const {boolean} */
+      this.is2d = this.dims[1] === 1;
+      /** @type {!Volume} */
+      this.volume = volume;
+      /** @type {!Crop} */
+      this.crop = this.fullCrop();
+      /** @type {!Array<number>} Voxels on show along each axis. */
+      this.cropDims = this.dims.slice();
+      /** @type {!Array<number>} Bounds of the part on show, in km. */
+      this.bounds = [0, 0, 0, 0, 0, 0];
+      /** @type {!Array<number>} Centre of the part on show, in km. */
+      this.centre = [0, 0, 0];
+      /** @type {number} Vertical exaggeration. */
+      this.exaggeration = 1;
+
+      /** @const {!Object} vtkImageData holding the part on show. */
+      this.image = DataModel.vtkImageData.newInstance();
+      this.image.setSpacing(this.spacing[0], this.is2d ? 1 : this.spacing[1], this.spacing[2]);
+
+      /** @const {!Object} */
+      this.window = vtk.Rendering.Misc.vtkGenericRenderWindow.newInstance({background: [1, 1, 1]});
+      this.window.setContainer(container);
+      this.window.resize();
+      /** @const {!Object} */
+      this.renderer = this.window.getRenderer();
+      /** @const {!Object} */
+      this.renderWindow = this.window.getRenderWindow();
+      /** @const {!Object} */
+      this.camera = this.renderer.getActiveCamera();
+      /** @private @const {!Set<!Object>} Actors that stretch with the exaggeration. */
+      this.scaled_ = new Set();
+
+      this.setVolume(volume);
+      new ResizeObserver(() => {
+        this.window.resize();
+        this.render();
+      }).observe(container);
+    }
+
+    /** @return {!Crop} The crop box of the whole model. */
+    fullCrop() {
+      const [nx, ny, nz] = this.dims;
+      return {i0: 0, i1: nx - 1, j0: 0, j1: ny - 1, k0: 0, k1: nz - 1};
+    }
+
+    /** @return {boolean} Whether the whole model is on show. */
+    isUncut() {
+      return this.cropDims.every((n, axis) => n === this.dims[axis]);
+    }
+
+    /**
+     * @param {number} i Voxel east of the crop's west side.
+     * @param {number} j Voxel north of the crop's south side.
+     * @param {number} k Voxel above the crop's base.
+     * @return {number} Index of that voxel in the whole volume.
+     */
+    indexOf(i, j, k) {
+      const [nx, ny] = this.dims;
+      return this.crop.i0 + i + nx * (this.crop.j0 + j + ny * (this.crop.k0 + k));
+    }
+
+    /**
+     * Puts a volume on show, keeping the current crop.
+     * @param {!Volume} volume Volume on the scene's grid.
+     * @throws {Error} If the volume's grid differs from the scene's.
+     */
+    setVolume(volume) {
+      if (volume.meta.dims.some((n, axis) => n !== this.dims[axis])) {
+        throw new Error('this field is on a different grid from the first one');
+      }
+      this.volume = volume;
+      this.fillImage_();
+    }
+
+    /**
+     * Changes the part of the model on show.
+     * @param {!Crop} crop The new crop box.
+     */
+    setCrop(crop) {
+      this.crop = crop;
+      this.fillImage_();
+    }
+
+    /**
+     * Copies the cropped part of the volume into the image and updates bounds and centre.
+     * @private
+     */
+    fillImage_() {
+      const [nx, ny, nz] = this.dims;
+      const {crop, spacing} = this;
+      const {raw} = this.volume;
+      const cx = crop.i1 - crop.i0 + 1;
+      const cy = crop.j1 - crop.j0 + 1;
+      const cz = crop.k1 - crop.k0 + 1;
+      this.cropDims = [cx, cy, cz];
+      let values = raw;
       if (cx !== nx || cy !== ny || cz !== nz) {
-        sub = new Uint16Array(cx * cy * cz);
-        for (var z = 0; z < cz; z++) for (var y = 0; y < cy; y++) {
-          var s0 = cr.i0 + nx * (y + cr.j0 + ny * (z + cr.k0));
-          sub.set(raw.subarray(s0, s0 + cx), cx * (y + cy * z));
+        values = new Uint16Array(cx * cy * cz);
+        for (let z = 0; z < cz; z++) {
+          for (let y = 0; y < cy; y++) {
+            const from = this.indexOf(0, y, z);
+            values.set(raw.subarray(from, from + cx), cx * (y + cy * z));
+          }
         }
       }
-      image.setDimensions(cx, cy, cz);
-      image.setOrigin(cr.i0 * sp[0], is2d ? 0 : cr.j0 * sp[1], -meta.extent_km[2] + cr.k0 * sp[2]);   // z = 0 stays at the top of the whole model
-      image.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'v', numberOfComponents: 1, values: sub }));
-      image.modified();
-      B = image.getBounds(); C = [(B[0] + B[1]) / 2, (B[2] + B[3]) / 2, (B[4] + B[5]) / 2];
-    };
-    setData(vol.raw);
-
-    var grw = vtk.Rendering.Misc.vtkGenericRenderWindow.newInstance({ background: [1, 1, 1] });
-    grw.setContainer($('view')); grw.resize();
-    var ren = grw.getRenderer(), win = grw.getRenderWindow(), cam = ren.getActiveCamera();
-    var scaled = [];        // everything that stretches with vertical exaggeration
-
-    // ── colour scale: a named ramp stretched between two typed limits ──
-    var MT = [[0, '#7a0403'], [.125, '#d93806'], [.25, '#f9a41b'], [.42, '#e8e86a'], [.54, '#7fd67f'], [.71, '#2fa3d9'], [.875, '#3a4fc4'], [1, '#30123b']];
-    // red - yellow - blue: red at the low end, so conductive (low resistivity) is red
-    var RYB = [[0, '#a50026'], [.125, '#d73027'], [.25, '#f46d43'], [.375, '#fdae61'], [.5, '#ffffbf'], [.625, '#abd9e9'], [.75, '#74add1'], [.875, '#4575b4'], [1, '#313695']];
-    var hex2rgb = function (h) { return [1, 3, 5].map(function (i) { return parseInt(h.substr(i, 2), 16) / 255; }); };
-    var ramp = function (n) {
-      if (n === 'mt' || n === 'ryb') return (n === 'mt' ? MT : RYB).map(function (s) { return [s[0]].concat(hex2rgb(s[1])); });
-      var p = Core.vtkColorTransferFunction.vtkColorMaps.getPresetByName(n).RGBPoints, out = [], a = p[0], b = p[p.length - 4];
-      for (var i = 0; i < p.length; i += 4) out.push([(p[i] - a) / (b - a), p[i + 1], p[i + 2], p[i + 3]]);
-      return out;
-    };
-    var ctf = Core.vtkColorTransferFunction.newInstance();
-    var css = function (c) { return 'rgb(' + c.slice(1).map(function (v) { return Math.round(v * 255); }).join(',') + ')'; };
-    var applyScale = function () {
-      var vmin = +$('vmin').value, vmax = +$('vmax').value;
-      var ok = $('vmin').value !== '' && $('vmax').value !== '' && physOk(vmin) && physOk(vmax) && vmin < vmax;
-      if (!ok) { $('verr').textContent = isLog ? 'Enter two positive numbers, smallest first.' : 'Enter two numbers, smallest first.'; return false; }
-      $('verr').textContent = '';
-      var a = toStored(vmin), b = toStored(vmax);
-      var stops = ramp($('cmap').value);
-      if ($('rev').checked) stops = stops.map(function (s) { return [1 - s[0], s[1], s[2], s[3]]; }).reverse();
-      ctf.removeAllPoints();
-      stops.forEach(function (s) { ctf.addRGBPoint(toRaw(a + s[0] * (b - a)), s[1], s[2], s[3]); });
-      $('ramp').style.background = 'linear-gradient(90deg,' + stops.map(function (s) { return css(s) + ' ' + (s[0] * 100).toFixed(1) + '%'; }).join(',') + ')';
-      // ticks at their true place: the two limits, plus powers of ten (log) or the midpoint (linear)
-      var t = [a];
-      if (isLog) { for (var d = Math.ceil(a + 1e-9); d < b - 1e-9; d++) if (d - a > 0.14 * (b - a) && b - d > 0.14 * (b - a)) t.push(d); if (t.length > 4) t = [a].concat(t.slice(1).filter(function (_, i, arr) { return i % Math.ceil(arr.length / 3) === 0; })); }
-      else t.push((a + b) / 2);
-      t.push(b);
-      $('ticks').innerHTML = t.map(function (v) { return '<span style="left:' + ((v - a) / (b - a) * 100).toFixed(1) + '%">' + fmt(toPhys(v)) + '</span>'; }).join('');
-      return true;
-    };
-    var colourAt = function (stored, actor) { var c = [0, 0, 0]; ctf.getColor(toRaw(stored), c); actor.getProperty().setColor(c[0] * 0.85, c[1] * 0.85, c[2] * 0.85); };
-
-    // ── slices ──
-    var slices = {};
-    ['i', 'j', 'k'].forEach(function (ax) {
-      var mapper = Core.vtkImageMapper.newInstance(); mapper.setInputData(image);
-      var actor = Core.vtkImageSlice.newInstance(); actor.setMapper(mapper);
-      actor.getProperty().setRGBTransferFunction(0, ctf);
-      actor.getProperty().setUseLookupTableScalarRange(true);
-      actor.getProperty().setInterpolationTypeToNearest();     // the model's own cells, unsmoothed
-      if (is2d) { var op = DM.vtkPiecewiseFunction.newInstance(); op.addPoint(0, 0); op.addPoint(30, 0); op.addPoint(79, 1); op.addPoint(65535, 1); actor.getProperty().setPiecewiseFunction(0, op); }
-      ren.addActor(actor); scaled.push(actor);
-      slices[ax] = { mapper: mapper, actor: actor };
-    });
-    var setSlice = { i: function (v) { slices.i.mapper.setISlice(v); }, j: function (v) { slices.j.mapper.setJSlice(v); }, k: function (v) { slices.k.mapper.setKSlice(v); } };
-
-    // ── walls and floor (3D): the outer faces of the box, coloured by the model. A face turned
-    //    towards the viewer is not drawn, so from any side you look into the box and see the far
-    //    walls and the floor behind whatever is inside. ──
-    var walls = null, wallPoly = null;
-    if (!is2d) {
-      wallPoly = DM.vtkPolyData.newInstance();
-      var wMapper = Core.vtkMapper.newInstance(); wMapper.setInputData(wallPoly); wMapper.setScalarModeToUsePointData(); wMapper.setColorModeToDirectScalars();
-      walls = Core.vtkActor.newInstance(); walls.setMapper(wMapper);
-      walls.getProperty().setFrontfaceCulling(true); walls.getProperty().setBackfaceCulling(false);
-      walls.getProperty().setAmbient(1); walls.getProperty().setDiffuse(0); walls.getProperty().setSpecular(0);
-      walls.setVisibility(false); ren.addActor(walls); scaled.push(walls);
+      this.image.setDimensions(cx, cy, cz);
+      // z = 0 stays at the top of the whole model, whatever is cut away.
+      this.image.setOrigin(crop.i0 * spacing[0], this.is2d ? 0 : crop.j0 * spacing[1], -this.depthKm + crop.k0 * spacing[2]);
+      this.image.getPointData().setScalars(dataArray('v', values, 1));
+      this.image.modified();
+      const b = this.image.getBounds();
+      this.bounds = b;
+      this.centre = [(b[0] + b[1]) / 2, (b[2] + b[3]) / 2, (b[4] + b[5]) / 2];
     }
-    var updateWalls = function () {
-      if (is2d || !$('on-walls').checked) return;
-      var raw = curRaw, o = image.getOrigin(), P = [], Q = [], RGB = [], c = [0, 0, 0];
-      var face = function (nu, nv, at, flip) {        // at(u, v) gives the voxel [i, j, k] within the box on show
-        var base = P.length / 3, u, v;
-        for (v = 0; v < nv; v++) for (u = 0; u < nu; u++) {
-          var q = at(u, v), r = raw[cr.i0 + q[0] + nx * (cr.j0 + q[1] + ny * (cr.k0 + q[2]))];
-          P.push(o[0] + q[0] * sp[0], o[1] + q[1] * sp[1], o[2] + q[2] * sp[2]);
-          if (r) { ctf.getColor(r, c); RGB.push(c[0] * 255, c[1] * 255, c[2] * 255); } else RGB.push(255, 255, 255);   // no value: white
-        }
-        for (v = 0; v < nv - 1; v++) for (u = 0; u < nu - 1; u++) {
-          var a = base + u + nu * v, b = a + 1, d = a + nu, e = d + 1;
-          if (flip) Q.push(4, a, d, e, b); else Q.push(4, a, b, e, d);      // wound so each face looks outward
-        }
-      };
-      face(cy, cz, function (u, v) { return [0, u, v]; }, true);            // west
-      face(cy, cz, function (u, v) { return [cx - 1, u, v]; }, false);      // east
-      face(cx, cz, function (u, v) { return [u, 0, v]; }, false);           // south
-      face(cx, cz, function (u, v) { return [u, cy - 1, v]; }, true);       // north
-      face(cx, cy, function (u, v) { return [u, v, 0]; }, true);            // floor
-      face(cx, cy, function (u, v) { return [u, v, cz - 1]; }, false);      // top
-      wallPoly.getPoints().setData(Float32Array.from(P), 3); wallPoly.getPolys().setData(Uint32Array.from(Q));
-      wallPoly.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'rgb', numberOfComponents: 3, values: Uint8Array.from(RGB) }));
-      wallPoly.modified();
-    };
 
-    // ── solid body (3D): everything between a minimum and a maximum, closed off where it meets
-    //    the edge of the model. Built on a copy of the volume with one extra voxel all round that
-    //    counts as "outside", so the surface is capped at the box instead of left open. ──
-    var solid = null, padImg = null, pad = null, solidMC = null, px, py, pz;
-    var sizePad = function () {          // one voxel bigger than the box on every side
-      px = cx + 2; py = cy + 2; pz = cz + 2;
-      padImg.setDimensions(px, py, pz);
-      padImg.setOrigin((cr.i0 - 1) * sp[0], (cr.j0 - 1) * sp[1], -meta.extent_km[2] + (cr.k0 - 1) * sp[2]);
-      pad = new Float32Array(px * py * pz).fill(-1e9);
-      // give it values straight away: the window may draw before the first body is worked out
-      padImg.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'g', numberOfComponents: 1, values: pad }));
-      padImg.modified();
-    };
-    if (!is2d) {
-      padImg = DM.vtkImageData.newInstance(); padImg.setSpacing(sp[0], sp[1], sp[2]);
-      sizePad();
-      solidMC = vtk.Filters.General.vtkImageMarchingCubes.newInstance({ contourValue: 0, computeNormals: true, mergePoints: true });
-      solidMC.setInputData(padImg);
-      var sm = Core.vtkMapper.newInstance(); sm.setInputConnection(solidMC.getOutputPort()); sm.setScalarVisibility(false);
-      solid = Core.vtkActor.newInstance(); solid.setMapper(sm); ren.addActor(solid); scaled.push(solid);
-    }
-    var solidState = { ok: false, text: '' };
-    var updateSolid = function () {
-      if (is2d) return;
-      updateWalls();          // same moments: new data, new colours, new extent
-      var useMin = $('s-min-on').checked, useMax = $('s-max-on').checked, vmin = +$('s-min').value, vmax = +$('s-max').value;
-      var bad = (useMin && ($('s-min').value === '' || !physOk(vmin))) || (useMax && ($('s-max').value === '' || !physOk(vmax))) || (useMin && useMax && !(vmin < vmax));
-      $('s-err').textContent = bad ? (useMin && useMax ? 'Minimum must be below maximum.' : 'Enter a valid value.') : '';
-      solidState.ok = !bad && (useMin || useMax);
-      if (!solidState.ok) return;
-      var a = useMin ? toRaw(toStored(vmin)) : -Infinity, b = useMax ? toRaw(toStored(vmax)) : Infinity;
-      var raw = cache[stemOf()].raw, gap = cache[stemOf()].gap, OUT = -1e9, inside = 0;
-      pad.fill(OUT);
-      var below = Math.max(0, +$('s-below').value || 0);      // km: the body is only drawn deeper than this
-      for (var z = 0; z < cz; z++) for (var y = 0; y < cy; y++) {
-        if ((nz - 1 - (cr.k0 + z)) * sp[2] < below) continue;
-        var src = cr.i0 + nx * (y + cr.j0 + ny * (z + cr.k0)), dst = 1 + px * (y + 1 + py * (z + 1));
-        for (var x = 0; x < cx; x++) {
-          var v = raw[src + x];
-          if (gap && gap[src + x]) continue;                    // no value here: never part of the body
-          var g = Math.min(v - a, b - v);                       // positive inside the range
-          pad[dst + x] = g; if (g > 0) inside++;
-        }
+    /**
+     * Adds an actor to the picture.
+     * @param {!Object} actor A vtk actor.
+     * @param {boolean=} stretches Whether it follows the vertical exaggeration. Default true.
+     */
+    add(actor, stretches = true) {
+      this.renderer.addActor(actor);
+      if (stretches) {
+        this.scaled_.add(actor);
+        actor.setScale(1, 1, this.exaggeration);
       }
-      padImg.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'g', numberOfComponents: 1, values: pad }));
-      padImg.modified();
-      colourAt(useMin && useMax ? (toStored(vmin) + toStored(vmax)) / 2 : toStored(useMin ? vmin : vmax), solid);
-      solidState.text = (100 * inside / (cx * cy * cz)).toFixed(1) + (cx * cy * cz === nx * ny * nz ? ' % of the model' : ' % of the part shown');
-    };
+    }
 
-    // ── extra surfaces at typed values (3D) ──
-    var surfs = [];
-    var updateSurfs = function () {
-      if (is2d) return;
-      surfs.forEach(function (s) { ren.removeActor(s.actor); scaled.splice(scaled.indexOf(s.actor), 1); });
-      surfs = [];
-      var parts = $('surf').value.split(/[,;\s]+/).filter(Boolean), vals = parts.map(Number);
-      var bad = vals.some(function (v) { return !physOk(v); }) || vals.length > 6;
-      $('surf-err').textContent = bad ? (vals.length > 6 ? 'Six values at most.' : 'Use numbers separated by commas.') : '';
-      if (bad) return;
-      vals.forEach(function (v) {
-        var mcx = vtk.Filters.General.vtkImageMarchingCubes.newInstance({ contourValue: toRaw(toStored(v)), computeNormals: true, mergePoints: true });
-        mcx.setInputData(image);
-        var m = Core.vtkMapper.newInstance(); m.setInputConnection(mcx.getOutputPort()); m.setScalarVisibility(false);
-        var a = Core.vtkActor.newInstance(); a.setMapper(m); colourAt(toStored(v), a);
-        ren.addActor(a); scaled.push(a); surfs.push({ actor: a, value: v, mc: mcx });
+    /** @param {!Object} actor An actor added with add(). */
+    remove(actor) {
+      this.renderer.removeActor(actor);
+      this.scaled_.delete(actor);
+    }
+
+    /** @param {number} factor Vertical exaggeration; 1 is true scale. */
+    setExaggeration(factor) {
+      this.exaggeration = factor;
+      this.scaled_.forEach((actor) => actor.setScale(1, 1, factor));
+    }
+
+    /**
+     * @param {number} x East, km.
+     * @param {number} y North, km.
+     * @param {number} z Up, km, before exaggeration.
+     * @return {!Array<number>} Position in canvas pixels, origin bottom left.
+     */
+    toCanvas(x, y, z) {
+      return this.window.getApiSpecificRenderWindow().worldToDisplay(x, y, z * this.exaggeration, this.renderer);
+    }
+
+    /** Fits the whole picture in the window without changing the viewing direction. */
+    reframe() {
+      this.renderer.resetCamera();
+      this.renderer.resetCameraClippingRange();
+      this.render();
+    }
+
+    /** Redraws the picture. */
+    render() {
+      this.renderWindow.render();
+    }
+  }
+
+  /**
+   * The colour scale: a named ramp stretched between two limits, and the conversions between
+   * physical, stored and raw values for the field on show.
+   */
+  class ColourScale {
+    constructor() {
+      /** @const {!Object} vtkColorTransferFunction over raw values. */
+      this.transfer = Core.vtkColorTransferFunction.newInstance();
+      /** @private {number} */
+      this.lo_ = 0;
+      /** @private {number} */
+      this.hi_ = 1;
+      /** @type {boolean} Whether the field is stored as log10. */
+      this.isLog = true;
+    }
+
+    /** @param {!VolumeMeta} meta Header of the volume on show. */
+    setStorage(meta) {
+      this.lo_ = meta.scale.lo;
+      this.hi_ = meta.scale.hi;
+      this.isLog = meta.log !== false;
+    }
+
+    /**
+     * @param {number} stored A stored value.
+     * @return {number} The raw value (not rounded).
+     */
+    toRaw(stored) {
+      return 1 + (stored - this.lo_) / (this.hi_ - this.lo_) * (RAW_MAX - 1);
+    }
+
+    /**
+     * @param {number} physical A physical value.
+     * @return {number} The stored value.
+     */
+    toStored(physical) {
+      return this.isLog ? Math.log10(physical) : physical;
+    }
+
+    /**
+     * @param {number} stored A stored value.
+     * @return {number} The physical value.
+     */
+    toPhysical(stored) {
+      return this.isLog ? Math.pow(10, stored) : stored;
+    }
+
+    /**
+     * @param {number} fraction Position in the stored range, 0 to 1.
+     * @return {number} The physical value there.
+     */
+    physicalAt(fraction) {
+      return this.toPhysical(this.lo_ + fraction * (this.hi_ - this.lo_));
+    }
+
+    /**
+     * @param {number} physical A typed value.
+     * @return {boolean} Whether it can be shown on this scale.
+     */
+    isValid(physical) {
+      return isFinite(physical) && (!this.isLog || physical > 0);
+    }
+
+    /**
+     * Stretches a ramp between two limits.
+     * @param {number} low Lower limit, stored.
+     * @param {number} high Upper limit, stored.
+     * @param {string} rampName Key of RAMPS, or a vtk.js preset name.
+     * @param {boolean} reversed Whether to run the ramp backwards.
+     * @return {!Array<!Array<number>>} The stops used, as [fraction, r, g, b].
+     */
+    apply(low, high, rampName, reversed) {
+      let stops = ColourScale.ramp_(rampName);
+      if (reversed) stops = stops.map(([at, r, g, b]) => [1 - at, r, g, b]).reverse();
+      this.transfer.removeAllPoints();
+      stops.forEach(([at, r, g, b]) => this.transfer.addRGBPoint(this.toRaw(low + at * (high - low)), r, g, b));
+      return stops;
+    }
+
+    /**
+     * @param {number} raw A raw value.
+     * @param {!Array<number>} out Receives red, green and blue, each 0 to 1.
+     */
+    colourOfRaw(raw, out) {
+      this.transfer.getColor(raw, out);
+    }
+
+    /**
+     * @param {number} stored A stored value.
+     * @return {!Array<number>} Its colour, darkened a little so a lit surface does not wash out.
+     */
+    surfaceColour(stored) {
+      const c = [0, 0, 0];
+      this.transfer.getColor(this.toRaw(stored), c);
+      return c.map((v) => v * 0.85);
+    }
+
+    /**
+     * Picks legend ticks at their true place: the two limits, plus powers of ten (log fields)
+     * or the midpoint (linear fields).
+     * @param {number} low Lower limit, stored.
+     * @param {number} high Upper limit, stored.
+     * @return {!Array<number>} Tick positions, stored.
+     */
+    ticks(low, high) {
+      const span = high - low;
+      if (!this.isLog) return [low, (low + high) / 2, high];
+      let decades = [];
+      for (let d = Math.ceil(low + 1e-9); d < high - 1e-9; d++) {
+        if (d - low > 0.14 * span && high - d > 0.14 * span) decades.push(d);   // clear of the end labels
+      }
+      if (decades.length > 3) {
+        const every = Math.ceil(decades.length / 3);
+        decades = decades.filter((_, n) => n % every === 0);
+      }
+      return [low, ...decades, high];
+    }
+
+    /**
+     * @param {string} name Ramp name.
+     * @return {!Array<!Array<number>>} Stops as [fraction, r, g, b].
+     * @private
+     */
+    static ramp_(name) {
+      if (RAMPS[name]) return RAMPS[name].map(([at, hex]) => [at, ...hexToRgb(hex)]);
+      const preset = Core.vtkColorTransferFunction.vtkColorMaps.getPresetByName(name);
+      if (!preset) throw new Error(`unknown colour ramp "${name}"`);
+      const p = preset.RGBPoints;
+      const first = p[0];
+      const last = p[p.length - 4];
+      const stops = [];
+      for (let n = 0; n < p.length; n += 4) stops.push([(p[n] - first) / (last - first), p[n + 1], p[n + 2], p[n + 3]]);
+      return stops;
+    }
+  }
+
+  /**
+   * Three flat sections through the model, one across each axis, showing the model's own cells
+   * unsmoothed. A 2D section uses only the middle one.
+   */
+  class Slices {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!ColourScale} scale The colour scale.
+     */
+    constructor(stage, scale) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!Object<string, {mapper: !Object, actor: !Object}>} */
+      this.byAxis_ = {};
+      ['i', 'j', 'k'].forEach((axis) => {
+        const mapper = Core.vtkImageMapper.newInstance();
+        mapper.setInputData(stage.image);
+        const actor = Core.vtkImageSlice.newInstance();
+        actor.setMapper(mapper);
+        const property = actor.getProperty();
+        property.setRGBTransferFunction(0, scale.transfer);
+        property.setUseLookupTableScalarRange(true);
+        property.setInterpolationTypeToNearest();
+        if (stage.is2d) {
+          // See-through where there is no value (raw 0), solid from RAW_2D_FLOOR up.
+          const opacity = DataModel.vtkPiecewiseFunction.newInstance();
+          opacity.addPoint(0, 0);
+          opacity.addPoint(30, 0);
+          opacity.addPoint(RAW_2D_FLOOR - 1, 1);
+          opacity.addPoint(RAW_MAX, 1);
+          property.setPiecewiseFunction(0, opacity);
+        }
+        stage.add(actor);
+        this.byAxis_[axis] = {mapper, actor};
       });
-    };
+    }
 
-    // ── box, and axes with distances ──
-    var outline = vtk.Filters.General.vtkOutlineFilter.newInstance(); outline.setInputData(image);
-    var oMapper = Core.vtkMapper.newInstance(); oMapper.setInputConnection(outline.getOutputPort());
-    var oActor = Core.vtkActor.newInstance(); oActor.setMapper(oMapper); oActor.getProperty().setColor(0.16, 0.15, 0.45);
-    ren.addActor(oActor); scaled.push(oActor);
-    var ve = 1;
-    var nice = function (a, b) {                       // round tick values across a range
-      var span = b - a, step = Math.pow(10, Math.floor(Math.log10(span / 3))), r = span / 3 / step;
-      step *= r >= 5 ? 5 : r >= 2 ? 2 : 1;
-      var out = []; for (var t = Math.ceil(a / step - 1e-9) * step; t <= b + 1e-9; t += step) out.push(+t.toPrecision(12));
-      return out;
-    };
-    // The box is stretched upward by the exaggeration; the depth labels still read true kilometres.
-    // Built with extend() rather than newInstance(): newInstance returns a locked object, and the
-    // labelling step below has to be replaced.
-    var axes = {};
-    Core.vtkCubeAxesActor.extend(axes, {}, { generateTicks: function (b) {
-      var t = [nice(b[0], b[1]), nice(b[2], b[3]), nice(b[4] / ve, b[5] / ve)];
-      var str = t.map(function (a) { return a.map(function (v) { return String(+v.toPrecision(6)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }); });
-      return { ticks: [t[0], t[1], t[2].map(function (v) { return v * ve; })], tickStrings: str };
-    } });
-    // Label one edge per axis, not every outer edge. The library marks each edge it would label
-    // with 1; all but the first for each axis are changed to "draw the line, no text".
-    var EDGE_AXIS = [0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2], labelEdges = axes.updateTextData;
-    axes.updateTextData = function (faces, edges, ticks, strings) {
-      var seen = [false, false, false], e2 = Array.prototype.slice.call(edges);
-      for (var i = 0; i < 12; i++) if (e2[i] === 1) { if (seen[EDGE_AXIS[i]]) e2[i] = 2; else seen[EDGE_AXIS[i]] = true; }
-      return labelEdges(faces, e2, ticks, strings);
-    };
-    axes.setDataBounds(B);      // before anything is drawn
-    axes.setCamera(cam); axes.setAxisLabels(is2d ? [axisNames[0], '', axisNames[2]] : axisNames);
-    axes.setTickTextStyle({ fontColor: '#333333', fontSize: 13, fontFamily: 'Arial' });
-    axes.setAxisTextStyle({ fontColor: '#282572', fontSize: 15, fontStyle: 'bold', fontFamily: 'Arial' });
-    axes.getProperty().setColor(0.62, 0.64, 0.68);
-    ren.addActor(axes);
+    /**
+     * Places and shows one section.
+     * @param {string} axis 'i' (across east), 'j' (across north) or 'k' (level).
+     * @param {number} index Voxel in the whole model; moved into the part on show if outside it.
+     * @param {boolean} visible Whether to draw it.
+     * @param {number} opacity 0 to 1.
+     */
+    set(axis, index, visible, opacity) {
+      const n = 'ijk'.indexOf(axis);
+      const first = this.stage_.crop[`${axis}0`];
+      const local = Math.max(0, Math.min(this.stage_.cropDims[n] - 1, index - first));
+      const {mapper, actor} = this.byAxis_[axis];
+      mapper[`set${axis.toUpperCase()}Slice`](local);
+      actor.setVisibility(visible);
+      actor.getProperty().setOpacity(opacity);
+    }
+  }
 
-    // ── observation sites, where the scene has them ──
-    var sites = null, siteApi = null, S = null;
-    if (sc.sites) {
-      S = (await (await fetch('volumes/' + sc.sites)).json()).sites;
-      // Sites are plain dark points, or tinted by how well the model fits each one (see fit.js).
-      // A second, larger point sits just under the chosen site to mark it.
-      var shown = [], fitRGB = null, picked = null;
-      var poly = DM.vtkPolyData.newInstance(), ring = DM.vtkPolyData.newInstance();
-      var sMapper = Core.vtkMapper.newInstance(); sMapper.setInputData(poly); sMapper.setScalarModeToUsePointData(); sMapper.setColorModeToDirectScalars();
-      sites = Core.vtkActor.newInstance(); sites.setMapper(sMapper);
-      var rMapper = Core.vtkMapper.newInstance(); rMapper.setInputData(ring);
-      var ringActor = Core.vtkActor.newInstance(); ringActor.setMapper(rMapper); ringActor.getProperty().setPointSize(18); ringActor.getProperty().setColor(0.157, 0.145, 0.447);
-      var placeSites = function () {
-        shown = [];
-        if (cr.k1 === nz - 1) S.forEach(function (s, i) { if (!(s.x < B[0] || s.x > B[1] || s.y < B[2] || s.y > B[3])) shown.push(i); });
-        var n = shown.length, pts = new Float32Array(n * 3), verts = new Uint32Array(n * 2), rgb = new Uint8Array(n * 3);
-        var tint = !!fitRGB && $('on-sitefit').checked;
-        shown.forEach(function (si, q) {
-          var p = S[si];
-          pts.set([p.x, p.y, 0.05], 3 * q); verts[2 * q] = 1; verts[2 * q + 1] = q; rgb.set((tint && fitRGB[p.id]) || [13, 13, 13], 3 * q);
-        });
-        poly.getPoints().setData(pts, 3); poly.getVerts().setData(verts);
-        poly.getPointData().setScalars(vtk.Common.Core.vtkDataArray.newInstance({ name: 'rgb', numberOfComponents: 3, values: rgb }));
-        poly.modified();
-        sites.getProperty().setPointSize(tint ? 11 : 6);
-        var p = picked != null && shown.indexOf(picked) >= 0 ? S[picked] : null;
-        ring.getPoints().setData(new Float32Array(p ? [p.x, p.y, 0.03] : []), 3); ring.getVerts().setData(new Uint32Array(p ? [1, 0] : [])); ring.modified();
-        $('n-sites').textContent = '(' + n + (n < S.length ? ' of ' + S.length : '') + ')';
-      };
-      placeSites();
-      ren.addActor(ringActor); scaled.push(ringActor);
-      ren.addActor(sites); scaled.push(sites);
+  /**
+   * Walls and floor (3D): the six outer faces of the part on show, coloured by the model. A face
+   * turned towards the viewer is not drawn, so from any side you look into the box and see the
+   * far walls and the floor behind whatever is inside.
+   */
+  class Walls {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!ColourScale} scale The colour scale.
+     */
+    constructor(stage, scale) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!ColourScale} */
+      this.scale_ = scale;
+      /** @private @const {!Object} */
+      this.poly_ = DataModel.vtkPolyData.newInstance();
+      const mapper = Core.vtkMapper.newInstance();
+      mapper.setInputData(this.poly_);
+      mapper.setScalarModeToUsePointData();
+      mapper.setColorModeToDirectScalars();
+      /** @const {!Object} */
+      this.actor = Core.vtkActor.newInstance();
+      this.actor.setMapper(mapper);
+      const property = this.actor.getProperty();
+      property.setFrontfaceCulling(true);
+      property.setBackfaceCulling(false);
+      property.setAmbient(1);     // flat colour: the walls are a backdrop, not a lit object
+      property.setDiffuse(0);
+      property.setSpecular(0);
+      this.actor.setVisibility(false);
+      stage.add(this.actor);
+    }
 
-      siteApi = {
-        onPick: null,
-        colour: function (byId) { fitRGB = byId; placeSites(); win.render(); },
-        select: function (id) { picked = null; S.forEach(function (p, i) { if (p.id === id) picked = i; }); placeSites(); win.render(); },
-        shown: function () { return shown.map(function (i) { return S[i].id; }); },
-        toScreen: function (id) {       // where a site is drawn, in page pixels; for checks
-          var p = S.filter(function (q) { return q.id === id; })[0], api = grw.getApiSpecificRenderWindow(), cv = api.getCanvas(), r = cv.getBoundingClientRect(), k = cv.width / r.width;
-          var d = api.worldToDisplay(p.x, p.y, 0.05 * ve, ren); return [r.left + d[0] / k, r.bottom - d[1] / k];
+    /**
+     * Rebuilds the faces. Needed when the data, the colours or the extent change.
+     */
+    update() {
+      const stage = this.stage_;
+      const [cx, cy, cz] = stage.cropDims;
+      const {raw} = stage.volume;
+      const origin = stage.image.getOrigin();
+      const sp = stage.spacing;
+      const nPoints = 2 * (cy * cz + cx * cz + cx * cy);
+      const nQuads = 2 * ((cy - 1) * (cz - 1) + (cx - 1) * (cz - 1) + (cx - 1) * (cy - 1));
+      const points = new Float32Array(nPoints * 3);
+      const colours = new Uint8Array(nPoints * 3);
+      const quads = new Uint32Array(nQuads * 5);
+      const rgb = [0, 0, 0];
+      let p = 0;
+      let q = 0;
+
+      /**
+       * Adds one face as a grid of points and quads.
+       * @param {number} nu Points along the face's first direction.
+       * @param {number} nv Points along its second direction.
+       * @param {function(number, number): !Array<number>} voxelAt Maps a face position to [i, j, k] in the crop.
+       * @param {boolean} flip Reverses the winding, so that every face looks outward.
+       */
+      const face = (nu, nv, voxelAt, flip) => {
+        const base = p;
+        for (let v = 0; v < nv; v++) {
+          for (let u = 0; u < nu; u++) {
+            const [i, j, k] = voxelAt(u, v);
+            const value = raw[stage.indexOf(i, j, k)];
+            points.set([origin[0] + i * sp[0], origin[1] + j * sp[1], origin[2] + k * sp[2]], 3 * p);
+            if (value) {
+              this.scale_.colourOfRaw(value, rgb);
+              colours.set([rgb[0] * 255, rgb[1] * 255, rgb[2] * 255], 3 * p);
+            } else {
+              colours.set([255, 255, 255], 3 * p);     // no value: white
+            }
+            p++;
+          }
+        }
+        for (let v = 0; v < nv - 1; v++) {
+          for (let u = 0; u < nu - 1; u++) {
+            const a = base + u + nu * v;
+            const b = a + 1;
+            const d = a + nu;
+            const e = d + 1;
+            quads.set(flip ? [4, a, d, e, b] : [4, a, b, e, d], 5 * q);
+            q++;
+          }
         }
       };
-      $('on-sitefit').addEventListener('input', function () { placeSites(); win.render(); });
-      // a click (not a drag) on a site chooses it
-      var down = null;
-      $('view').addEventListener('pointerdown', function (e) { down = [e.clientX, e.clientY]; }, true);
-      $('view').addEventListener('pointerup', function (e) {
-        if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !sites.getVisibility()) return;
-        var api = grw.getApiSpecificRenderWindow(), cv = api.getCanvas(), r = cv.getBoundingClientRect(), k = cv.width / r.width;
-        var mx = (e.clientX - r.left) * k, my = (r.bottom - e.clientY) * k, best = null, bd = 14 * k;
-        shown.forEach(function (si) {
-          var d = api.worldToDisplay(S[si].x, S[si].y, 0.05 * ve, ren), dist = Math.hypot(d[0] - mx, d[1] - my);
-          if (dist < bd) { bd = dist; best = si; }
+      face(cy, cz, (u, v) => [0, u, v], true);            // west
+      face(cy, cz, (u, v) => [cx - 1, u, v], false);      // east
+      face(cx, cz, (u, v) => [u, 0, v], false);           // south
+      face(cx, cz, (u, v) => [u, cy - 1, v], true);       // north
+      face(cx, cy, (u, v) => [u, v, 0], true);            // floor
+      face(cx, cy, (u, v) => [u, v, cz - 1], false);      // top
+
+      this.poly_.getPoints().setData(points, 3);
+      this.poly_.getPolys().setData(quads);
+      this.poly_.getPointData().setScalars(dataArray('rgb', colours, 3));
+      this.poly_.modified();
+    }
+  }
+
+  /**
+   * Solid body (3D): everything between a minimum and a maximum value, closed off where it meets
+   * the edge of the part on show.
+   *
+   * Built on a copy of the volume with one extra voxel all round that counts as "outside", so
+   * the surface is capped at the box instead of left open.
+   */
+  class SolidBody {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!ColourScale} scale The colour scale.
+     */
+    constructor(stage, scale) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!ColourScale} */
+      this.scale_ = scale;
+      /** @private @const {!Object} Padded image of signed "how far inside the range" values. */
+      this.image_ = DataModel.vtkImageData.newInstance();
+      this.image_.setSpacing(...stage.spacing);
+      /** @private {!Float32Array} */
+      this.values_ = new Float32Array(0);
+      this.resize();
+      const surface = vtkImageMarchingCubes.newInstance({contourValue: 0, computeNormals: true, mergePoints: true});
+      surface.setInputData(this.image_);
+      const mapper = Core.vtkMapper.newInstance();
+      mapper.setInputConnection(surface.getOutputPort());
+      mapper.setScalarVisibility(false);
+      /** @const {!Object} */
+      this.actor = Core.vtkActor.newInstance();
+      this.actor.setMapper(mapper);
+      stage.add(this.actor);
+    }
+
+    /**
+     * Sizes the padded image to the part on show. Call after the extent changes, before update().
+     */
+    resize() {
+      const stage = this.stage_;
+      const [cx, cy, cz] = stage.cropDims;
+      const sp = stage.spacing;
+      this.image_.setDimensions(cx + 2, cy + 2, cz + 2);
+      this.image_.setOrigin((stage.crop.i0 - 1) * sp[0], (stage.crop.j0 - 1) * sp[1], -stage.depthKm + (stage.crop.k0 - 1) * sp[2]);
+      // Filled straight away: the window may draw before the first body is worked out.
+      this.values_ = new Float32Array((cx + 2) * (cy + 2) * (cz + 2)).fill(OUTSIDE);
+      this.image_.getPointData().setScalars(dataArray('g', this.values_, 1));
+      this.image_.modified();
+    }
+
+    /**
+     * Works out the body for a range of values.
+     * @param {number} rawMin Lowest raw value inside; -Infinity for no lower limit.
+     * @param {number} rawMax Highest raw value inside; Infinity for no upper limit.
+     * @param {number} belowKm The body is only drawn deeper than this.
+     * @return {number} The fraction of the part on show that is inside, 0 to 1.
+     */
+    update(rawMin, rawMax, belowKm) {
+      const stage = this.stage_;
+      const [cx, cy, cz] = stage.cropDims;
+      const nz = stage.dims[2];
+      const {raw, gap} = stage.volume;
+      const values = this.values_;
+      const px = cx + 2;
+      const py = cy + 2;
+      let inside = 0;
+      values.fill(OUTSIDE);
+      for (let z = 0; z < cz; z++) {
+        if ((nz - 1 - (stage.crop.k0 + z)) * stage.spacing[2] < belowKm) continue;
+        for (let y = 0; y < cy; y++) {
+          const from = stage.indexOf(0, y, z);
+          const to = 1 + px * (y + 1 + py * (z + 1));
+          for (let x = 0; x < cx; x++) {
+            if (gap && gap[from + x]) continue;                   // no value here: never part of the body
+            const v = raw[from + x];
+            const depthInside = Math.min(v - rawMin, rawMax - v);   // positive inside the range
+            values[to + x] = depthInside;
+            if (depthInside > 0) inside++;
+          }
+        }
+      }
+      this.image_.getPointData().setScalars(dataArray('g', values, 1));
+      this.image_.modified();
+      return inside / (cx * cy * cz);
+    }
+
+    /** @param {number} stored Stored value whose colour the body takes. */
+    setColourAt(stored) {
+      this.actor.getProperty().setColor(...this.scale_.surfaceColour(stored));
+    }
+  }
+
+  /**
+   * Extra surfaces through the model at typed values (3D).
+   */
+  class Surfaces {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!ColourScale} scale The colour scale.
+     */
+    constructor(stage, scale) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!ColourScale} */
+      this.scale_ = scale;
+      /** @private {!Array<{actor: !Object, value: number}>} */
+      this.items_ = [];
+    }
+
+    /**
+     * Replaces the surfaces.
+     * @param {!Array<number>} values Physical values, one surface each.
+     */
+    set(values) {
+      this.items_.forEach(({actor}) => this.stage_.remove(actor));
+      this.items_ = values.map((value) => {
+        const stored = this.scale_.toStored(value);
+        const surface = vtkImageMarchingCubes.newInstance({
+          contourValue: this.scale_.toRaw(stored), computeNormals: true, mergePoints: true,
         });
-        if (best != null) { siteApi.select(S[best].id); if (siteApi.onPick) siteApi.onPick(S[best].id); }
+        surface.setInputData(this.stage_.image);
+        const mapper = Core.vtkMapper.newInstance();
+        mapper.setInputConnection(surface.getOutputPort());
+        mapper.setScalarVisibility(false);
+        const actor = Core.vtkActor.newInstance();
+        actor.setMapper(mapper);
+        this.stage_.add(actor);
+        return {actor, value};
+      });
+      this.recolour();
+    }
+
+    /** Takes each surface's colour from the scale again. Call after the scale changes. */
+    recolour() {
+      this.items_.forEach(({actor, value}) => {
+        actor.getProperty().setColor(...this.scale_.surfaceColour(this.scale_.toStored(value)));
+      });
+    }
+
+    /** @param {number} opacity 0 to 1, for every surface. */
+    setOpacity(opacity) {
+      this.items_.forEach(({actor}) => actor.getProperty().setOpacity(opacity));
+    }
+  }
+
+  /**
+   * The outline of the part on show, and axes with distances in kilometres.
+   *
+   * The box is stretched upward by the exaggeration, while the depth labels still read true km.
+   */
+  class BoxAxes {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!Array<string>} names Axis titles: east, north, up.
+     */
+    constructor(stage, names) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+
+      const outline = vtkOutlineFilter.newInstance();
+      outline.setInputData(stage.image);
+      const mapper = Core.vtkMapper.newInstance();
+      mapper.setInputConnection(outline.getOutputPort());
+      /** @const {!Object} */
+      this.outline = Core.vtkActor.newInstance();
+      this.outline.setMapper(mapper);
+      this.outline.getProperty().setColor(0.16, 0.15, 0.45);
+      stage.add(this.outline);
+
+      // Built with extend() rather than newInstance(): newInstance() returns a locked object,
+      // and two of its steps are replaced below.
+      /** @const {!Object} vtkCubeAxesActor. */
+      this.axes = {};
+      Core.vtkCubeAxesActor.extend(this.axes, {}, {generateTicks: (bounds) => this.ticks_(bounds)});
+      // Label one edge per axis, not every outer edge. The library marks each edge it would
+      // label with 1; all but the first for each axis are changed to 2, "draw the line, no text".
+      const EDGE_AXIS = [0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2];
+      const labelEdges = this.axes.updateTextData;
+      this.axes.updateTextData = (faces, edges, ticks, strings) => {
+        const seen = [false, false, false];
+        const chosen = Array.from(edges);
+        for (let n = 0; n < 12; n++) {
+          if (chosen[n] !== 1) continue;
+          if (seen[EDGE_AXIS[n]]) chosen[n] = 2;
+          else seen[EDGE_AXIS[n]] = true;
+        }
+        return labelEdges(faces, chosen, ticks, strings);
+      };
+      this.axes.setDataBounds(stage.bounds);      // before anything is drawn
+      this.axes.setCamera(stage.camera);
+      this.axes.setAxisLabels(stage.is2d ? [names[0], '', names[2]] : names);
+      this.axes.setTickTextStyle({fontColor: '#333333', fontSize: 13, fontFamily: 'Arial'});
+      this.axes.setAxisTextStyle({fontColor: '#282572', fontSize: 15, fontStyle: 'bold', fontFamily: 'Arial'});
+      this.axes.getProperty().setColor(0.62, 0.64, 0.68);
+      stage.add(this.axes, false);
+    }
+
+    /** Fits the axes to the part on show and the exaggeration. Call after either changes. */
+    fit() {
+      const b = this.stage_.bounds;
+      const ve = this.stage_.exaggeration;
+      this.axes.setDataBounds([b[0], b[1], b[2], b[3], b[4] * ve, b[5] * ve]);
+    }
+
+    /**
+     * @param {!Array<number>} bounds Drawn bounds, with the exaggeration applied.
+     * @return {{ticks: !Array<!Array<number>>, tickStrings: !Array<!Array<string>>}} Tick
+     *     positions as drawn, and labels in true kilometres.
+     * @private
+     */
+    ticks_(bounds) {
+      const ve = this.stage_.exaggeration;
+      const km = [niceTicks(bounds[0], bounds[1]), niceTicks(bounds[2], bounds[3]), niceTicks(bounds[4] / ve, bounds[5] / ve)];
+      const thousands = (v) => String(+v.toPrecision(6)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return {
+        ticks: [km[0], km[1], km[2].map((v) => v * ve)],
+        tickStrings: km.map((axis) => axis.map(thousands)),
+      };
+    }
+  }
+
+  /**
+   * Observation sites on top of the model.
+   *
+   * Sites are plain dark points, or tinted by a colour per site supplied from outside (fit.js
+   * uses this to show how well the model fits each one). A larger point under the chosen site
+   * marks it. Clicking a site chooses it.
+   */
+  class SiteLayer {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!Array<{id: string, x: number, y: number}>} sites Sites, positions in km.
+     * @param {!HTMLElement} container Element that receives the clicks.
+     */
+    constructor(stage, sites, container) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!Array<{id: string, x: number, y: number}>} */
+      this.sites_ = sites;
+      /** @private {!Array<number>} Indices into sites_ of those inside the part on show. */
+      this.shown_ = [];
+      /** @private {?Object<string, !Array<number>>} RGB (0 to 255) by site id. */
+      this.colours_ = null;
+      /** @private {boolean} */
+      this.tinted_ = false;
+      /** @private {?number} Index of the chosen site. */
+      this.chosen_ = null;
+      /** @type {?function(string)} Called with the id of a site the visitor clicks. */
+      this.onPick = null;
+
+      /** @private @const {!Object} */
+      this.points_ = DataModel.vtkPolyData.newInstance();
+      const mapper = Core.vtkMapper.newInstance();
+      mapper.setInputData(this.points_);
+      mapper.setScalarModeToUsePointData();
+      mapper.setColorModeToDirectScalars();
+      /** @private @const {!Object} */
+      this.actor_ = Core.vtkActor.newInstance();
+      this.actor_.setMapper(mapper);
+
+      /** @private @const {!Object} */
+      this.ring_ = DataModel.vtkPolyData.newInstance();
+      const ringMapper = Core.vtkMapper.newInstance();
+      ringMapper.setInputData(this.ring_);
+      /** @private @const {!Object} */
+      this.ringActor_ = Core.vtkActor.newInstance();
+      this.ringActor_.setMapper(ringMapper);
+      this.ringActor_.getProperty().setPointSize(18);
+      this.ringActor_.getProperty().setColor(0.157, 0.145, 0.447);
+
+      this.place();
+      stage.add(this.ringActor_);
+      stage.add(this.actor_);
+      this.listenForClicks_(container);
+    }
+
+    /** @return {number} How many sites there are in all. */
+    get total() {
+      return this.sites_.length;
+    }
+
+    /** @return {!Array<string>} Ids of the sites inside the part on show. */
+    shownIds() {
+      return this.shown_.map((n) => this.sites_[n].id);
+    }
+
+    /**
+     * Rebuilds the points. Call after the extent changes.
+     */
+    place() {
+      const b = this.stage_.bounds;
+      const topOnShow = this.stage_.crop.k1 === this.stage_.dims[2] - 1;
+      this.shown_ = [];
+      if (topOnShow) {
+        this.sites_.forEach((s, n) => {
+          if (s.x >= b[0] && s.x <= b[1] && s.y >= b[2] && s.y <= b[3]) this.shown_.push(n);
+        });
+      }
+      const count = this.shown_.length;
+      const points = new Float32Array(count * 3);
+      const cells = new Uint32Array(count * 2);
+      const colours = new Uint8Array(count * 3);
+      const tint = this.tinted_ && !!this.colours_;
+      this.shown_.forEach((siteIndex, n) => {
+        const site = this.sites_[siteIndex];
+        points.set([site.x, site.y, SITE_HEIGHT_KM], 3 * n);
+        cells.set([1, n], 2 * n);
+        colours.set((tint && this.colours_[site.id]) || [13, 13, 13], 3 * n);
+      });
+      this.points_.getPoints().setData(points, 3);
+      this.points_.getVerts().setData(cells);
+      this.points_.getPointData().setScalars(dataArray('rgb', colours, 3));
+      this.points_.modified();
+      this.actor_.getProperty().setPointSize(tint ? 11 : 6);
+
+      const marked = this.chosen_ != null && this.shown_.includes(this.chosen_) ? this.sites_[this.chosen_] : null;
+      // The ring sits just under the site's own point.
+      this.ring_.getPoints().setData(new Float32Array(marked ? [marked.x, marked.y, SITE_HEIGHT_KM - 0.02] : []), 3);
+      this.ring_.getVerts().setData(new Uint32Array(marked ? [1, 0] : []));
+      this.ring_.modified();
+    }
+
+    /**
+     * Supplies a colour per site.
+     * @param {?Object<string, !Array<number>>} byId RGB (0 to 255) by site id.
+     */
+    colour(byId) {
+      this.colours_ = byId;
+      this.place();
+      this.stage_.render();
+    }
+
+    /** @param {boolean} on Whether to draw sites in the supplied colours. */
+    setTinted(on) {
+      this.tinted_ = on;
+      this.place();
+    }
+
+    /** @param {string} id Site to mark as chosen. */
+    select(id) {
+      const n = this.sites_.findIndex((s) => s.id === id);
+      this.chosen_ = n < 0 ? null : n;
+      this.place();
+      this.stage_.render();
+    }
+
+    /** @param {boolean} on Whether to draw the sites. */
+    setVisible(on) {
+      this.actor_.setVisibility(on);
+      this.ringActor_.setVisibility(on);
+    }
+
+    /**
+     * Chooses the nearest site when the visitor clicks (not drags) close to one.
+     * @param {!HTMLElement} container Element that receives the pointer events.
+     * @private
+     */
+    listenForClicks_(container) {
+      let pressedAt = null;
+      container.addEventListener('pointerdown', (e) => { pressedAt = [e.clientX, e.clientY]; }, true);
+      container.addEventListener('pointerup', (e) => {
+        if (!pressedAt || !this.actor_.getVisibility()) return;
+        if (Math.hypot(e.clientX - pressedAt[0], e.clientY - pressedAt[1]) > CLICK_SLOP_PX) return;
+        const canvas = this.stage_.window.getApiSpecificRenderWindow().getCanvas();
+        const box = canvas.getBoundingClientRect();
+        const perCssPixel = canvas.width / box.width;
+        const x = (e.clientX - box.left) * perCssPixel;
+        const y = (box.bottom - e.clientY) * perCssPixel;
+        let nearest = null;
+        let nearestDistance = PICK_RADIUS_PX * perCssPixel;
+        this.shown_.forEach((n) => {
+          const site = this.sites_[n];
+          const at = this.stage_.toCanvas(site.x, site.y, SITE_HEIGHT_KM);
+          const distance = Math.hypot(at[0] - x, at[1] - y);
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = site;
+          }
+        });
+        if (!nearest) return;
+        this.select(nearest.id);
+        if (this.onPick) this.onPick(nearest.id);
       }, true);
     }
-
-    // ── compass cube ──
-    var L = sc.compass || ['E', 'W', 'N', 'S'];
-    var cube = Core.vtkAnnotatedCubeActor.newInstance();
-    cube.setDefaultStyle({ text: '', fontStyle: 'bold', fontFamily: 'Arial', fontColor: 'white', fontSizeScale: function (res) { return res / 2.4; }, faceColor: '#282572', faceRotation: 0, edgeThickness: 0.08, edgeColor: 'white', resolution: 300 });
-    cube.setXPlusFaceProperty({ text: L[0] }); cube.setXMinusFaceProperty({ text: L[1] });
-    cube.setYPlusFaceProperty({ text: L[2] }); cube.setYMinusFaceProperty({ text: L[3] });
-    cube.setZPlusFaceProperty({ text: 'UP', faceColor: '#3F88C8' }); cube.setZMinusFaceProperty({ text: 'DN', faceColor: '#6C757D' });
-    var OMW = vtk.Interaction.Widgets.vtkOrientationMarkerWidget;
-    var compass = OMW.newInstance({ actor: cube, interactor: win.getInteractor() });
-    compass.setEnabled(true); compass.setViewportCorner(OMW.Corners.BOTTOM_RIGHT);
-    compass.setViewportSize(0.16); compass.setMinPixelSize(90); compass.setMaxPixelSize(130);
-    // the same marker as three arrows, in the AusMT data colours
-    var ARROW = [[234, 30, 49], [89, 143, 57], [63, 136, 200]];
-    var arrows = Core.vtkAxesActor.newInstance();
-    arrows.setXConfig({ color: ARROW[0] }); arrows.setYConfig({ color: ARROW[1] }); arrows.setZConfig({ color: ARROW[2] }); arrows.update();
-    $('arrow-key').innerHTML = [L[0], L[2], 'up'].map(function (t, i) { return '<i style="background:rgb(' + ARROW[i].join(',') + ')"></i>' + t; }).join('');
-    var setCompass = function () {
-      var m = $('compass').value;
-      compass.setEnabled(false);
-      if (m !== 'off') { compass.setActor(m === 'arrows' ? arrows : cube); compass.setEnabled(true); compass.updateMarkerOrientation(); }
-      $('arrow-key').hidden = m !== 'arrows';
-    };
-
-    // ── set views ──
-    var VIEWS = { oblique: [[-1, -1.5, 0.9], [0, 0, 1]], above: [[0, 0, 1], [0, 1, 0]], south: [[0, -1, 0], [0, 0, 1]], north: [[0, 1, 0], [0, 0, 1]], east: [[1, 0, 0], [0, 0, 1]], west: [[-1, 0, 0], [0, 0, 1]] };
-    var current = null;
-    var tilt = 0;               // degrees above level for the four side views; set by a model's defaults
-    var view = function (n, keepTilt) {
-      var v = VIEWS[n], cz = C[2] * ve, p = v[0]; current = n;
-      if (!keepTilt) tilt = 0;
-      if (tilt && p[2] === 0) { var t = tilt * Math.PI / 180; p = [p[0] * Math.cos(t), p[1] * Math.cos(t), Math.sin(t)]; }
-      cam.setFocalPoint(C[0], C[1], cz); cam.setPosition(C[0] + p[0], C[1] + p[1], cz + p[2]); cam.setViewUp(v[1][0], v[1][1], v[1][2]);
-      ren.resetCamera(); if (is2d) cam.zoom(1.2); ren.resetCameraClippingRange(); compass.updateMarkerOrientation(); win.render();
-      [].forEach.call($('views').children, function (b) { b.setAttribute('aria-pressed', b.dataset.v === n); });
-    };
-    $('views').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) view(b.dataset.v); });
-    $('view').addEventListener('pointerdown', function () { current = null; [].forEach.call($('views').children, function (b) { b.setAttribute('aria-pressed', 'false'); }); });
-    if (sc.viewNames) [].forEach.call($('views').children, function (b) { if (sc.viewNames[b.dataset.v]) b.textContent = sc.viewNames[b.dataset.v]; });
-
-    // ── vertical exaggeration: stretch everything upward, keep the labels true ──
-    var setVE = function (v) {
-      ve = v;
-      scaled.forEach(function (a) { a.setScale(1, 1, ve); });
-      axes.setDataBounds([B[0], B[1], B[2], B[3], B[4] * ve, B[5] * ve]);
-      $('ve-note').textContent = ve === 1 ? 'True scale.' : 'Heights are drawn ' + ve + ' times taller than widths. Depth labels stay true.';
-    };
-
-    // ── controls ──
-    var short = function (label) { return label.replace(/\s*\(.*\)/, '').toLowerCase(); };
-    var pct = function (id) { var v = +$(id).value; return Math.min(1, Math.max(0.05, (isFinite(v) && $(id).value !== '' ? v : 100) / 100)); };
-    var sync = function () {
-      if (!is2d) {
-        solid.setVisibility($('on-solid').checked && solidState.ok); solid.getProperty().setOpacity(pct('s-op'));
-        $('s-o').textContent = $('on-solid').checked && solidState.ok ? solidState.text : '';
-        surfs.forEach(function (s) { s.actor.getProperty().setOpacity(pct('surf-op')); });
-        var inBox = function (v, a, n) { return Math.max(0, Math.min(n - 1, v - a)); };
-        setSlice.k(inBox(+$('k').value, cr.k0, cz)); $('k-o').textContent = ((nz - 1 - $('k').value) * sp[2]).toFixed(sp[2] < 1 ? 1 : 0) + ' km deep';
-        setSlice.i(inBox(+$('i').value, cr.i0, cx)); $('i-o').textContent = ($('i').value * sp[0]).toFixed(sp[0] < 1 ? 1 : 0) + ' km';
-        setSlice.j(inBox(+$('j').value, cr.j0, cy)); $('j-o').textContent = ($('j').value * sp[1]).toFixed(sp[1] < 1 ? 1 : 0) + ' km';
-        ['i', 'j', 'k'].forEach(function (ax) { slices[ax].actor.setVisibility($('on-' + ax).checked); slices[ax].actor.getProperty().setOpacity(pct('op-' + ax)); });
-      } else {
-        setSlice.j(0); slices.i.actor.setVisibility(false); slices.k.actor.setVisibility(false); slices.j.actor.setVisibility(true);
-      }
-      if (sites) { sites.setVisibility($('on-sites').checked); ringActor.setVisibility($('on-sites').checked); }
-      axes.setVisibility($('on-axes').checked); oActor.setVisibility($('on-outline').checked);
-      if (walls) walls.setVisibility($('on-walls').checked);
-      win.render();
-    };
-    var rescale = function () { if (applyScale()) { updateSolid(); updateSurfs(); setVE(ve); sync(); } };
-
-    // take a field's own range and defaults
-    var fieldOver = null;       // set by a saved view; cleared when the visitor picks a field
-    var useField = function (keepLimits) {
-      var f = Object.assign({}, sc.fields[fi], fieldOver || {}), m = cache[stemOf()].meta;
-      lo = m.scale.lo; hi = m.scale.hi; isLog = m.log !== false; unit = f.unit;
-      $('scale-title').textContent = f.label + (unit ? ' (' + unit + ')' : '');
-      [].forEach.call(document.querySelectorAll('.unit'), function (e) { e.textContent = unit || ''; });
-      if (!keepLimits) {
-        $('vmin').value = fmt(f.vmin != null ? f.vmin : toPhys(lo)); $('vmax').value = fmt(f.vmax != null ? f.vmax : toPhys(hi));
-        $('cmap').value = f.cmap || 'mt'; $('rev').checked = !!f.reverse;
-        var s = f.solid || {};
-        $('s-min-on').checked = s.min != null; $('s-max-on').checked = s.max != null;
-        $('s-min').value = fmt(s.min != null ? s.min : toPhys(lo + 0.25 * (hi - lo))); $('s-max').value = fmt(s.max != null ? s.max : toPhys(lo + 0.75 * (hi - lo)));
-        $('s-below').value = s.below_km || 0;
-        $('surf').value = (f.surfaces || []).join(', ');
-      }
-    };
-    var swap = async function (keepLimits) {
-      $('busy').hidden = false;
-      var v = await load(stemOf()); setData(v.raw); useField(keepLimits); applyScale(); updateSolid(); updateSurfs(); setVE(ve); sync();
-      $('busy').hidden = true;
-    };
-
-    // fields
-    $('field').innerHTML = sc.fields.map(function (f, i) { return '<option value="' + i + '">' + f.label + '</option>'; }).join('');
-    show('field-row', sc.fields.length > 1);
-    $('field').addEventListener('change', function () { fi = +this.value; fieldOver = null; swap(false); });
-
-    // time
-    var timer = null;
-    if (sc.times) {
-      $('t').max = sc.times.length - 1; $('t').value = ti;
-      var tLabel = function () { $('t-o').textContent = sc.times[ti].label; };
-      tLabel();
-      $('t').addEventListener('input', function () { ti = +this.value; tLabel(); swap(true); });
-      $('play').onclick = function () {
-        if (timer) { clearInterval(timer); timer = null; this.textContent = 'Play'; return; }
-        this.textContent = 'Pause';
-        timer = setInterval(function () { ti = (ti + 1) % sc.times.length; $('t').value = ti; tLabel(); swap(true); }, 900);
-      };
-    }
-    show('time-row', !!sc.times);
-    document.querySelector('.cp-data').hidden = sc.fields.length <= 1 && !sc.times && !(sc.views && sc.views.length);
-
-    // what a 2D section does not need
-    ['tab-slices', 'tab-volume'].forEach(function (id) { show(id, !is2d); });
-    show('sites-tick', !!sc.sites); show('sitefit-tick', !!(sc.sites && sc.fit)); show('walls-tick', !is2d);
-    $('on-walls').addEventListener('input', function () { updateWalls(); sync(); });
-    if (is2d) [].forEach.call($('views').children, function (b) { b.hidden = b.dataset.v !== 'south'; });
-    if (!is2d) {
-      $('k').max = nz - 1; $('i').max = nx - 1; $('j').max = ny - 1;
-      $('i-name').textContent = 'Section across ' + short(axisNames[0]); $('j-name').textContent = 'Section across ' + short(axisNames[1]);
-    }
-
-    ['k', 'i', 'j', 'on-k', 'on-i', 'on-j', 'op-k', 'op-i', 'op-j', 'on-solid', 's-op', 'surf-op', 'on-sites', 'on-axes', 'on-outline'].forEach(function (id) { $(id).addEventListener('input', sync); });
-    ['cmap', 'rev', 'vmin', 'vmax'].forEach(function (id) { $(id).addEventListener('change', rescale); });
-    ['s-min-on', 's-max-on', 's-min', 's-max', 's-below'].forEach(function (id) { $(id).addEventListener('change', function () { updateSolid(); sync(); }); });
-    $('surf').addEventListener('change', function () { updateSurfs(); setVE(ve); sync(); });
-    $('ve').addEventListener('change', function () { setVE(+this.value); if (current) view(current); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); } });
-    $('vreset').onclick = function () { fieldOver = null; useField(false); rescale(); };
-    $('compass').addEventListener('change', function () { setCompass(); win.render(); });
-
-    // ── extent: cut in from any side, in kilometres ──
-    var CUTS = [['cut-w', 0, 'i0', 1], ['cut-e', 0, 'i1', -1], ['cut-s', 1, 'j0', 1], ['cut-n', 1, 'j1', -1], ['cut-b', 2, 'k0', 1], ['cut-t', 2, 'k1', -1]];
-    var full = [nx, ny, nz];
-    var extentNote = function () {
-      var e = [cx - 1, cy - 1, cz - 1].map(function (n, a) { return n * sp[a]; });
-      var parts = (is2d ? [e[0], e[2]] : e).map(function (v) { return v.toFixed(v < 100 ? 1 : 0); });
-      $('cut-o').textContent = 'Showing ' + parts.join(' × ') + ' km';
-    };
-    var applyCut = function () {
-      var next = { i0: 0, i1: nx - 1, j0: 0, j1: ny - 1, k0: 0, k1: nz - 1 }, bad = '';
-      CUTS.forEach(function (c) {
-        if (is2d && c[1] === 1) return;
-        var v = $(c[0]).value === '' ? 0 : +$(c[0]).value;
-        if (!isFinite(v) || v < 0) { bad = 'Use zero or a positive distance.'; return; }
-        var n = Math.round(v / sp[c[1]]);
-        next[c[2]] = c[3] > 0 ? n : full[c[1]] - 1 - n;
-      });
-      if (!bad && (next.i1 - next.i0 < 1 || (!is2d && next.j1 - next.j0 < 1) || next.k1 - next.k0 < 1)) bad = 'Those cuts leave nothing to show.';
-      $('cut-err').textContent = bad;
-      if (bad) return;
-      cr = next;
-      setData(curRaw); if (!is2d) sizePad();
-      if (sites) placeSites();
-      updateSolid(); updateSurfs(); setVE(ve); extentNote(); sync();
-      if (current) view(current, true); else { ren.resetCamera(); ren.resetCameraClippingRange(); win.render(); }
-    };
-    CUTS.forEach(function (c) { $(c[0]).addEventListener('change', applyCut); });
-    $('cut-reset').onclick = function () { CUTS.forEach(function (c) { $(c[0]).value = 0; }); applyCut(); };
-    // name the sides the way this model names them
-    [['cut-w-l', L[1]], ['cut-e-l', L[0]], ['cut-s-l', L[3]], ['cut-n-l', L[2]]].forEach(function (p) { $(p[0]).textContent = { W: 'West', E: 'East', S: 'South', N: 'North' }[p[1]] || p[1] + ' side'; });
-    show('cut-s-row', !is2d); show('cut-n-row', !is2d);
-
-    // tabs in the control panel
-    $('tabs').addEventListener('click', function (e) {
-      var b = e.target.closest('button'); if (!b) return;
-      [].forEach.call($('tabs').children, function (t) { t.setAttribute('aria-selected', t === b); $('pane-' + t.dataset.p).hidden = t !== b; });
-    });
-
-    // full screen: the whole viewer, panel included
-    var app = $('app');
-    $('full').onclick = function () { if (document.fullscreenElement) document.exitFullscreen(); else app.requestFullscreen(); };
-    document.addEventListener('fullscreenchange', function () {
-      $('full').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
-      setTimeout(function () { grw.resize(); win.render(); }, 60);
-    });
-    window.addEventListener('resize', function () { grw.resize(); win.render(); });
-
-    // ── the model's own starting view. Everything a visitor can change has a default in the
-    //    scene file ("defaults", plus each field's own scale, solid and surfaces), so a model opens
-    //    looking the way its author chose, and "Model defaults" brings that back. ──
-    //    A model can also carry several named views ("views" in the scene file), each a full set of
-    //    the same settings, so its author can point at different things in the same model.
-    var D = sc.defaults || {};
-    var num = function (v, fallback) { return v != null ? v : fallback; };
-    var VIEWSETS = [{ name: sc.defaultsName || 'Opening view', defaults: sc.defaults || {}, field: null }].concat(sc.views || []);
-    $('preset').innerHTML = VIEWSETS.map(function (p, i) { return '<option value="' + i + '">' + p.name + '</option>'; }).join('');
-    show('preset-row', VIEWSETS.length > 1);
-    $('preset').addEventListener('change', function () { applyDefaults(); });
-    var applyDefaults = async function () {
-      var chosen = VIEWSETS[+$('preset').value] || VIEWSETS[0];
-      D = chosen.defaults || {}; fieldOver = chosen.field || null;
-      var sl = D.slices || {}, sh = D.show || {}, cut = D.cut || {};
-      fi = D.field || 0; $('field').value = fi;
-      if (sc.times) { ti = num(D.time, sc.times.length - 1); $('t').value = ti; $('t-o').textContent = sc.times[ti].label; }
-      $('ve').value = String(D.ve || 1);
-      $('on-outline').checked = sh.outline !== false; $('on-axes').checked = sh.axes !== false; $('on-sites').checked = sh.sites !== false; $('on-sitefit').checked = !!sh.siteFit; $('on-walls').checked = !!sh.walls;
-      $('compass').value = D.marker || 'cube';
-      [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']].forEach(function (c) { $(c[0]).value = cut[c[1]] || 0; });
-      if (!is2d) {
-        $('k').value = sl.depth_km != null ? nz - 1 - Math.round(sl.depth_km / sp[2]) : Math.round(nz * 0.85);
-        $('i').value = sl.x_km != null ? Math.round(sl.x_km / sp[0]) : Math.round(nx / 2);
-        $('j').value = sl.y_km != null ? Math.round(sl.y_km / sp[1]) : Math.round(ny / 2);
-        $('on-k').checked = sl.showDepth !== false; $('on-i').checked = !!sl.showX; $('on-j').checked = sl.showY !== false;
-        $('op-k').value = num(sl.opacityDepth, 100); $('op-i').value = num(sl.opacityX, 100); $('op-j').value = num(sl.opacityY, 100);
-        $('on-solid').checked = D.showSolid !== false; $('s-op').value = num(D.solidOpacity, 100); $('surf-op').value = num(D.surfaceOpacity, 50);
-      }
-      await swap(false);                    // the field's own scale, solid and surfaces
-      setVE(+$('ve').value); setCompass(); applyCut();
-      tilt = +D.tilt || 0; cam.setViewAngle(+D.viewAngle || 30);
-      // "from" is a direction of the model's own choosing: [east, north, up] towards the viewer
-      if (!is2d && D.from) VIEWS.custom = [D.from, [0, 0, 1]];
-      view(!is2d && D.from ? 'custom' : (!is2d && VIEWS[D.view] ? D.view : (is2d ? 'south' : 'oblique')), true);
-    };
-    $('to-defaults').onclick = function () { $('preset').value = 0; applyDefaults(); };
-
-    // For whoever sets a model up: the current settings, in the form the scene file takes.
-    $('copy-settings').onclick = function () {
-      var b = this, f = sc.fields[fi], on = function (id) { return $(id).checked; }, n = function (id) { return +$(id).value; };
-      var out = { defaults: { field: fi, view: current || 'oblique', ve: ve, marker: $('compass').value,
-        show: { outline: on('on-outline'), axes: on('on-axes'), sites: on('on-sites'), siteFit: on('on-sitefit'), walls: on('on-walls') },
-        cut: { w: n('cut-w'), e: n('cut-e'), s: n('cut-s'), n: n('cut-n'), t: n('cut-t'), b: n('cut-b') } } };
-      if (sc.times) out.defaults.time = ti;
-      if (!is2d) {
-        out.defaults.slices = { depth_km: +((nz - 1 - n('k')) * sp[2]).toFixed(2), x_km: +(n('i') * sp[0]).toFixed(2), y_km: +(n('j') * sp[1]).toFixed(2),
-          showDepth: on('on-k'), showX: on('on-i'), showY: on('on-j'), opacityDepth: n('op-k'), opacityX: n('op-i'), opacityY: n('op-j') };
-        out.defaults.showSolid = on('on-solid'); out.defaults.solidOpacity = n('s-op'); out.defaults.surfaceOpacity = n('surf-op');
-      }
-      out.field = { label: f.label, vmin: n('vmin'), vmax: n('vmax'), cmap: $('cmap').value, reverse: on('rev') };
-      if (!is2d) {
-        out.field.solid = {}; if (on('s-min-on')) out.field.solid.min = n('s-min'); if (on('s-max-on')) out.field.solid.max = n('s-max'); if (n('s-below') > 0) out.field.solid.below_km = n('s-below');
-        out.field.surfaces = $('surf').value.split(/[,;\s]+/).filter(Boolean).map(Number);
-      }
-      window.__lastSettings = out;
-      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy settings'; }, 1500); };
-      navigator.clipboard.writeText(JSON.stringify(out, null, 1)).then(done, done);
-    };
-
-    extentNote();
-    await applyDefaults();
-    msg.remove();
-    if (sc.fit && siteApi && window.MATEFit) window.MATEFit.init({ url: 'volumes/' + sc.fit, sites: S, api: siteApi });
-    window.__viewer = { siteApi: siteApi, walls: walls, wallPoly: wallPoly,  win: win, ren: ren, cam: cam, image: image, ctf: ctf, sites: sites, axes: axes, compass: compass, solid: solid, solidMC: solidMC, slices: slices, scene: sc, applyDefaults: applyDefaults, crop: function () { return { box: cr, dims: [cx, cy, cz], bounds: B }; },
-      surfs: function () { return surfs; }, ve: function () { return ve; },
-      state: function () { return { field: fi, time: ti, stem: stemOf(), loaded: Object.keys(cache).length, solid: solidState }; } };
-  } catch (e) {
-    msg.textContent = 'The viewer could not start: ' + e.message;
-    console.error(e);
   }
+
+  /**
+   * The direction marker in the corner: a labelled cube, three arrows, or nothing.
+   */
+  class Compass {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!Array<string>} labels Face labels for +east, -east, +north, -north.
+     */
+    constructor(stage, labels) {
+      /** @private @const {!Object} */
+      this.cube_ = Core.vtkAnnotatedCubeActor.newInstance();
+      this.cube_.setDefaultStyle({
+        text: '', fontStyle: 'bold', fontFamily: 'Arial', fontColor: 'white',
+        fontSizeScale: (resolution) => resolution / 2.4,
+        faceColor: '#282572', faceRotation: 0, edgeThickness: 0.08, edgeColor: 'white', resolution: 300,
+      });
+      this.cube_.setXPlusFaceProperty({text: labels[0]});
+      this.cube_.setXMinusFaceProperty({text: labels[1]});
+      this.cube_.setYPlusFaceProperty({text: labels[2]});
+      this.cube_.setYMinusFaceProperty({text: labels[3]});
+      this.cube_.setZPlusFaceProperty({text: 'UP', faceColor: '#3F88C8'});
+      this.cube_.setZMinusFaceProperty({text: 'DN', faceColor: '#6C757D'});
+
+      /** @private @const {!Object} */
+      this.arrows_ = Core.vtkAxesActor.newInstance();
+      this.arrows_.setXConfig({color: ARROW_RGB[0]});
+      this.arrows_.setYConfig({color: ARROW_RGB[1]});
+      this.arrows_.setZConfig({color: ARROW_RGB[2]});
+      this.arrows_.update();
+
+      /** @private @const {!Object} */
+      this.widget_ = vtkOrientationMarkerWidget.newInstance({actor: this.cube_, interactor: stage.renderWindow.getInteractor()});
+      this.widget_.setEnabled(true);
+      this.widget_.setViewportCorner(vtkOrientationMarkerWidget.Corners.BOTTOM_RIGHT);
+      this.widget_.setViewportSize(0.16);
+      this.widget_.setMinPixelSize(90);
+      this.widget_.setMaxPixelSize(130);
+    }
+
+    /** @param {string} mode 'cube', 'arrows' or 'off'. */
+    setMode(mode) {
+      this.widget_.setEnabled(false);
+      if (mode === 'off') return;
+      this.widget_.setActor(mode === 'arrows' ? this.arrows_ : this.cube_);
+      this.widget_.setEnabled(true);
+      this.widget_.updateMarkerOrientation();
+    }
+
+    /** Turns the marker to match the camera. Call after the camera is moved by code. */
+    follow() {
+      this.widget_.updateMarkerOrientation();
+    }
+  }
+
+  /**
+   * Set viewing directions.
+   */
+  class Camera {
+    /**
+     * @param {!Stage} stage The stage.
+     * @param {!Compass} compass The direction marker, kept in step with the camera.
+     */
+    constructor(stage, compass) {
+      /** @private @const {!Stage} */
+      this.stage_ = stage;
+      /** @private @const {!Compass} */
+      this.compass_ = compass;
+      /** @private @const {!Object<string, !Array<!Array<number>>>} */
+      this.directions_ = Object.assign({}, VIEW_DIRECTIONS);
+      /** @type {?string} The set view in use; null once the visitor has turned the model. */
+      this.current = null;
+      /** @type {number} Degrees above level for the four side views. */
+      this.tilt = 0;
+    }
+
+    /**
+     * @param {string} name A view name.
+     * @return {boolean} Whether that view exists.
+     */
+    has(name) {
+      return name in this.directions_;
+    }
+
+    /**
+     * Defines the view named 'custom'.
+     * @param {!Array<number>} from Direction [east, north, up] from the model towards the viewer.
+     */
+    setCustom(from) {
+      this.directions_.custom = [from, [0, 0, 1]];
+    }
+
+    /** @param {number} degrees Angle of view of the lens. */
+    setViewAngle(degrees) {
+      this.stage_.camera.setViewAngle(degrees);
+    }
+
+    /**
+     * Looks at the model from a set direction and fits it in the window.
+     * @param {string} name A view name.
+     * @param {boolean=} keepTilt Keep the current tilt. By default the tilt is cleared.
+     */
+    look(name, keepTilt = false) {
+      const stage = this.stage_;
+      const [direction, up] = this.directions_[name];
+      const [cx, cy] = stage.centre;
+      const cz = stage.centre[2] * stage.exaggeration;
+      let from = direction;
+      if (!keepTilt) this.tilt = 0;
+      if (this.tilt && direction[2] === 0) {
+        const t = this.tilt * Math.PI / 180;
+        from = [direction[0] * Math.cos(t), direction[1] * Math.cos(t), Math.sin(t)];
+      }
+      this.current = name;
+      stage.camera.setFocalPoint(cx, cy, cz);
+      stage.camera.setPosition(cx + from[0], cy + from[1], cz + from[2]);
+      stage.camera.setViewUp(...up);
+      stage.renderer.resetCamera();
+      if (stage.is2d) stage.camera.zoom(1.2);
+      stage.renderer.resetCameraClippingRange();
+      this.compass_.follow();
+      stage.render();
+    }
+  }
+
+  /**
+   * Fills in the model's record around the viewer: title, authors, text tabs, citation, links.
+   * @param {!Object} scene The scene entry.
+   * @param {!Object} record The model's record from volumes/records.json. Its snapshot,
+   *     overview, model, meta and citation fields are HTML written by tools/fetch_records.py.
+   * @param {string} sceneName The scene's key.
+   */
+  const renderRecord = (scene, record, sceneName) => {
+    document.title = `${scene.short} — M@TE (mockup)`;
+    $('crumb').textContent = record.slug;
+    $('title').textContent = record.title;
+    $('byline').innerHTML = `<b>${esc(record.creators.join(', '))}</b> · ${esc(scene.year)}`;
+    $('r-snapshot').innerHTML = record.snapshot;
+    ['overview', 'model', 'meta'].forEach((key) => { $(`r-${key}`).innerHTML = record[key]; });
+    $('r-cite').innerHTML = record.citation;
+    $('r-copy').addEventListener('click', (e) => {
+      const button = e.currentTarget;
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText($('r-cite').textContent).then(() => {
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy citation'; }, 1500);
+      });
+    });
+    if (record.data_url) {
+      $('r-get').insertAdjacentHTML('beforeend', `<a class="btn" href="${esc(record.data_url)}">Model files at NCI</a>`);
+    }
+    if (record.repo) {
+      $('r-get').insertAdjacentHTML('beforeend', `<a class="btn ghost" href="${esc(record.repo)}">M@TE record on GitHub</a>`);
+    }
+    $('r-dois').innerHTML = record.dois.map((d) =>
+      `<div><dt>${esc(d.label)}</dt><dd class="mono"><a href="https://doi.org/${esc(d.doi)}">${esc(d.doi)}</a></dd></div>`).join('');
+    $('r-creators').innerHTML = record.creators.map((c) => `<li>${esc(c)}</li>`).join('');
+    $('tags').innerHTML = record.tags.map((t) => `<li>${esc(t)}</li>`).join('');
+    $('rtabs').addEventListener('click', (e) => {
+      const chosen = e.target.closest('button');
+      if (!chosen) return;
+      [...$('rtabs').children].forEach((tab) => {
+        tab.setAttribute('aria-selected', tab === chosen);
+        $(`r-${tab.dataset.p}`).hidden = tab !== chosen;
+      });
+    });
+    // Links to the other pilot models stay in the mockup this page was opened from.
+    const variant = (location.search.match(/[?&]v=\w+/) || [''])[0].replace('?', '&');
+    document.querySelectorAll('.scene-links a').forEach((a) => {
+      a.href = `model-3d.html?scene=${a.dataset.s}${variant}`;
+      if (a.dataset.s === sceneName) a.setAttribute('aria-current', 'true');
+    });
+  };
+
+  /**
+   * Reads the page's controls and drives the parts of the picture.
+   *
+   * Everything a visitor can change has a default in the scene file ("defaults", plus each
+   * field's own scale, solid and surfaces), so a model opens looking the way its author chose,
+   * and "Model defaults" brings that back. A scene can also carry several named views ("views"),
+   * each a full set of the same settings.
+   */
+  class Viewer {
+    /**
+     * @param {!Object} scene The scene entry.
+     * @param {!VolumeStore} store Loader for the scene's volumes.
+     * @param {!Volume} volume The first volume.
+     * @param {?Array<{id: string, x: number, y: number}>} sites The scene's sites, if any.
+     */
+    constructor(scene, store, volume, sites) {
+      /** @private @const {!Object} */
+      this.scene_ = scene;
+      /** @private @const {!VolumeStore} */
+      this.store_ = store;
+      /** @private {number} Index of the field on show. */
+      this.field_ = 0;
+      /** @private {number} Index of the time step on show. */
+      this.time_ = scene.times ? scene.times.length - 1 : 0;
+      /** @private {?Object} Field settings from a saved view; cleared when the visitor picks a field. */
+      this.fieldOverride_ = null;
+      /** @private {number} Counts volume requests, so a slow one cannot overwrite a newer one. */
+      this.request_ = 0;
+      /** @private {?number} Timer id while playing. */
+      this.timer_ = null;
+      /** @private {{ok: boolean, text: string}} Whether a solid body is defined, and its size as text. */
+      this.body_ = {ok: false, text: ''};
+      /** @private @const {!Array<!Object>} The opening view, then the scene's saved views. */
+      this.presets_ = [{name: scene.defaultsName || 'Opening view', defaults: scene.defaults || {}, field: null}]
+          .concat(scene.views || []);
+
+      const names = volume.meta.axes || ['East (km)', 'North (km)', 'Depth (km)'];
+      const compassLabels = scene.compass || ['E', 'W', 'N', 'S'];
+      /** @private @const {!Stage} */
+      this.stage_ = new Stage($('view'), volume);
+      /** @private @const {boolean} */
+      this.is2d_ = this.stage_.is2d;
+      /** @private @const {!ColourScale} */
+      this.scale_ = new ColourScale();
+      this.scale_.setStorage(volume.meta);
+      // The order parts are made in is the order they are drawn in.
+      /** @private @const {!Slices} */
+      this.slices_ = new Slices(this.stage_, this.scale_);
+      /** @private @const {?Walls} */
+      this.walls_ = this.is2d_ ? null : new Walls(this.stage_, this.scale_);
+      /** @private @const {?SolidBody} */
+      this.solid_ = this.is2d_ ? null : new SolidBody(this.stage_, this.scale_);
+      /** @private @const {!BoxAxes} */
+      this.box_ = new BoxAxes(this.stage_, names);
+      /** @private @const {?SiteLayer} */
+      this.sites_ = sites ? new SiteLayer(this.stage_, sites, $('view')) : null;
+      /** @private @const {?Surfaces} */
+      this.surfaces_ = this.is2d_ ? null : new Surfaces(this.stage_, this.scale_);
+      /** @private @const {!Compass} */
+      this.compass_ = new Compass(this.stage_, compassLabels);
+      /** @private @const {!Camera} */
+      this.camera_ = new Camera(this.stage_, this.compass_);
+
+      this.setUpPage_(names, compassLabels);
+      this.bindControls_();
+    }
+
+    /** @return {?SiteLayer} The site layer, for fit.js. */
+    get siteLayer() {
+      return this.sites_;
+    }
+
+    /**
+     * Applies the opening view. Call once after construction.
+     * @return {!Promise<void>}
+     */
+    async open() {
+      this.noteExtent_();
+      this.updateSiteCount_();
+      await this.applyPreset_();
+    }
+
+    /**
+     * @return {string} File stem of the field and time step on show.
+     * @private
+     */
+    stem_() {
+      const field = this.scene_.fields[this.field_];
+      return this.scene_.times ? field.stem.replace('{t}', this.scene_.times[this.time_].id) : field.stem;
+    }
+
+    /**
+     * Sets the parts of the page that depend on the scene but never change afterwards.
+     * @param {!Array<string>} names Axis titles.
+     * @param {!Array<string>} compassLabels Labels for +east, -east, +north, -north.
+     * @private
+     */
+    setUpPage_(names, compassLabels) {
+      const scene = this.scene_;
+      const [nx, ny, nz] = this.stage_.dims;
+      const is2d = this.is2d_;
+
+      $('field').innerHTML = scene.fields.map((f, n) => `<option value="${n}">${esc(f.label)}</option>`).join('');
+      $('preset').innerHTML = this.presets_.map((p, n) => `<option value="${n}">${esc(p.name)}</option>`).join('');
+      show('field-row', scene.fields.length > 1);
+      show('preset-row', this.presets_.length > 1);
+      show('time-row', !!scene.times);
+      document.querySelector('.cp-data').hidden = scene.fields.length <= 1 && !scene.times && !(scene.views && scene.views.length);
+      if (scene.times) {
+        $('t').max = scene.times.length - 1;
+        $('t').value = this.time_;
+        $('t-o').textContent = scene.times[this.time_].label;
+      }
+
+      // A 2D section has no slices, volume, walls or north-south cuts, and one set view.
+      ['tab-slices', 'tab-volume', 'walls-tick', 'cut-s-row', 'cut-n-row'].forEach((id) => show(id, !is2d));
+      show('sites-tick', !!this.sites_);
+      show('sitefit-tick', !!(this.sites_ && scene.fit));
+      [...$('views').children].forEach((button) => {
+        if (is2d) button.hidden = button.dataset.v !== 'south';
+        if (scene.viewNames && scene.viewNames[button.dataset.v]) button.textContent = scene.viewNames[button.dataset.v];
+      });
+      if (!is2d) {
+        const plain = (title) => title.replace(/\s*\(.*\)/, '').toLowerCase();
+        $('k').max = nz - 1;
+        $('i').max = nx - 1;
+        $('j').max = ny - 1;
+        $('i-name').textContent = `Section across ${plain(names[0])}`;
+        $('j-name').textContent = `Section across ${plain(names[1])}`;
+      }
+
+      // Name the sides the way this model names them.
+      const SIDE = {W: 'West', E: 'East', S: 'South', N: 'North'};
+      [['cut-w-l', 1], ['cut-e-l', 0], ['cut-s-l', 3], ['cut-n-l', 2]].forEach(([id, n]) => {
+        $(id).textContent = SIDE[compassLabels[n]] || `${compassLabels[n]} side`;
+      });
+      $('arrow-key').innerHTML = [compassLabels[0], compassLabels[2], 'up']
+          .map((label, n) => `<i style="background:rgb(${ARROW_RGB[n].join(',')})"></i>${esc(label)}`).join('');
+    }
+
+    /**
+     * Connects the page's controls.
+     * @private
+     */
+    bindControls_() {
+      const on = (ids, type, handler) => ids.forEach((id) => $(id).addEventListener(type, handler));
+      const stage = this.stage_;
+
+      on(['k', 'i', 'j', 'on-k', 'on-i', 'on-j', 'op-k', 'op-i', 'op-j', 'on-solid', 's-op', 'surf-op',
+        'on-sites', 'on-axes', 'on-outline'], 'input', () => this.sync_());
+      on(['cmap', 'rev', 'vmin', 'vmax'], 'change', () => this.rescale_());
+      on(['s-min-on', 's-max-on', 's-min', 's-max', 's-below'], 'change', () => {
+        this.updateBody_();
+        this.sync_();
+      });
+      on(['surf'], 'change', () => {
+        this.updateSurfaces_();
+        this.sync_();
+      });
+      on(['on-walls'], 'input', () => {
+        this.updateWalls_();
+        this.sync_();
+      });
+      on(['on-sitefit'], 'input', () => {
+        if (!this.sites_) return;
+        this.sites_.setTinted($('on-sitefit').checked);
+        stage.render();
+      });
+      on(['ve'], 'change', () => {
+        this.setExaggeration_(+$('ve').value);
+        if (this.camera_.current) this.look_(this.camera_.current);
+        else stage.reframe();
+      });
+      on(['compass'], 'change', () => {
+        this.setCompass_();
+        stage.render();
+      });
+      on(['vreset'], 'click', () => {
+        // Brings back the field's own scale, solid and surfaces, so all three are worked out again.
+        this.fieldOverride_ = null;
+        this.useField_(false);
+        if (!this.applyScale_()) return;
+        this.updateWalls_();
+        this.updateBody_();
+        this.updateSurfaces_();
+        this.sync_();
+      });
+
+      on(['field'], 'change', () => {
+        this.field_ = +$('field').value;
+        this.fieldOverride_ = null;
+        this.showVolume_(false);
+      });
+      if (this.scene_.times) {
+        on(['t'], 'input', () => this.showTime_(+$('t').value));
+        on(['play'], 'click', () => this.togglePlay_());
+      }
+
+      on(CUTS.map((cut) => cut[0]), 'change', () => this.applyCut_());
+      on(['cut-reset'], 'click', () => {
+        CUTS.forEach((cut) => { $(cut[0]).value = 0; });
+        this.applyCut_();
+      });
+
+      $('views').addEventListener('click', (e) => {
+        const button = e.target.closest('button');
+        if (button) this.look_(button.dataset.v);
+      });
+      // Turning the model by hand leaves whichever set view was in use.
+      $('view').addEventListener('pointerdown', () => {
+        this.camera_.current = null;
+        this.markView_();
+      });
+
+      on(['preset'], 'change', () => this.applyPreset_());
+      on(['to-defaults'], 'click', () => {
+        $('preset').value = 0;
+        this.applyPreset_();
+      });
+      on(['copy-settings'], 'click', (e) => this.copySettings_(e.currentTarget));
+
+      $('tabs').addEventListener('click', (e) => {
+        const chosen = e.target.closest('button');
+        if (!chosen) return;
+        [...$('tabs').children].forEach((tab) => {
+          tab.setAttribute('aria-selected', tab === chosen);
+          $(`pane-${tab.dataset.p}`).hidden = tab !== chosen;
+        });
+      });
+
+      // Full screen takes the whole viewer, control panel included.
+      on(['full'], 'click', () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else $('app').requestFullscreen();
+      });
+      document.addEventListener('fullscreenchange', () => {
+        $('full').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
+      });
+    }
+
+    /**
+     * Reads a percentage control.
+     * @param {string} id Input id.
+     * @return {number} Opacity from 0.05 to 1; 1 if the box is empty or not a number.
+     * @private
+     */
+    opacity_(id) {
+      const text = $(id).value;
+      const percent = text !== '' && isFinite(+text) ? +text : 100;
+      return Math.min(1, Math.max(0.05, percent / 100));
+    }
+
+    /**
+     * Looks from a set view and shows which one is in use.
+     * @param {string} name A view name.
+     * @param {boolean=} keepTilt Keep the current tilt.
+     * @private
+     */
+    look_(name, keepTilt = false) {
+      this.camera_.look(name, keepTilt);
+      this.markView_();
+    }
+
+    /**
+     * Presses the button of the set view in use, and releases the others.
+     * @private
+     */
+    markView_() {
+      [...$('views').children].forEach((button) => {
+        button.setAttribute('aria-pressed', button.dataset.v === this.camera_.current);
+      });
+    }
+
+    /**
+     * Applies the typed colour limits, ramp and direction, and redraws the legend.
+     * @return {boolean} False if the limits are not usable; nothing is changed then.
+     * @private
+     */
+    applyScale_() {
+      const scale = this.scale_;
+      const vmin = +$('vmin').value;
+      const vmax = +$('vmax').value;
+      const ok = $('vmin').value !== '' && $('vmax').value !== '' && scale.isValid(vmin) && scale.isValid(vmax) && vmin < vmax;
+      if (!ok) {
+        $('verr').textContent = scale.isLog ? 'Enter two positive numbers, smallest first.' : 'Enter two numbers, smallest first.';
+        return false;
+      }
+      $('verr').textContent = '';
+      const low = scale.toStored(vmin);
+      const high = scale.toStored(vmax);
+      const stops = scale.apply(low, high, $('cmap').value, $('rev').checked);
+      const cssStops = stops.map(([at, r, g, b]) =>
+        `rgb(${[r, g, b].map((v) => Math.round(v * 255)).join(',')}) ${(at * 100).toFixed(1)}%`);
+      $('ramp').style.background = `linear-gradient(90deg,${cssStops.join(',')})`;
+      $('ticks').innerHTML = scale.ticks(low, high).map((v) =>
+        `<span style="left:${((v - low) / (high - low) * 100).toFixed(1)}%">${formatNumber(scale.toPhysical(v))}</span>`).join('');
+      return true;
+    }
+
+    /**
+     * Applies a change of colour scale to everything coloured by it.
+     * @private
+     */
+    rescale_() {
+      if (!this.applyScale_()) return;
+      this.updateWalls_();
+      this.colourBody_();
+      if (this.surfaces_) this.surfaces_.recolour();
+      this.sync_();
+    }
+
+    /**
+     * Rebuilds the walls, if they are on show.
+     * @private
+     */
+    updateWalls_() {
+      if (this.walls_ && $('on-walls').checked) this.walls_.update();
+    }
+
+    /**
+     * Reads the solid body's range.
+     * @return {{useMin: boolean, useMax: boolean, min: number, max: number, error: string}}
+     * @private
+     */
+    bodyRange_() {
+      const scale = this.scale_;
+      const useMin = $('s-min-on').checked;
+      const useMax = $('s-max-on').checked;
+      const min = +$('s-min').value;
+      const max = +$('s-max').value;
+      const badMin = useMin && ($('s-min').value === '' || !scale.isValid(min));
+      const badMax = useMax && ($('s-max').value === '' || !scale.isValid(max));
+      const badOrder = useMin && useMax && !(min < max);
+      let error = '';
+      if (badMin || badMax || badOrder) error = useMin && useMax ? 'Minimum must be below maximum.' : 'Enter a valid value.';
+      return {useMin, useMax, min, max, error};
+    }
+
+    /**
+     * Works out the solid body from its controls.
+     * @private
+     */
+    updateBody_() {
+      if (!this.solid_) return;
+      const scale = this.scale_;
+      const range = this.bodyRange_();
+      $('s-err').textContent = range.error;
+      this.body_.ok = !range.error && (range.useMin || range.useMax);
+      if (!this.body_.ok) return;
+      const rawMin = range.useMin ? scale.toRaw(scale.toStored(range.min)) : -Infinity;
+      const rawMax = range.useMax ? scale.toRaw(scale.toStored(range.max)) : Infinity;
+      const belowKm = Math.max(0, +$('s-below').value || 0);
+      const fraction = this.solid_.update(rawMin, rawMax, belowKm);
+      this.body_.text = `${(100 * fraction).toFixed(1)} % of the ${this.stage_.isUncut() ? 'model' : 'part shown'}`;
+      this.colourBody_();
+    }
+
+    /**
+     * Colours the solid body from the middle of its range.
+     * @private
+     */
+    colourBody_() {
+      if (!this.solid_ || !this.body_.ok) return;
+      const scale = this.scale_;
+      const {useMin, useMax, min, max} = this.bodyRange_();
+      const stored = useMin && useMax ? (scale.toStored(min) + scale.toStored(max)) / 2 : scale.toStored(useMin ? min : max);
+      this.solid_.setColourAt(stored);
+    }
+
+    /**
+     * Rebuilds the extra surfaces from the typed values.
+     * @private
+     */
+    updateSurfaces_() {
+      if (!this.surfaces_) return;
+      const values = parseNumberList($('surf').value);
+      let error = '';
+      if (values.length > MAX_SURFACES) error = 'Six values at most.';
+      else if (values.some((v) => !this.scale_.isValid(v))) error = 'Use numbers separated by commas.';
+      $('surf-err').textContent = error;
+      this.surfaces_.set(error ? [] : values);
+    }
+
+    /**
+     * @param {number} factor Vertical exaggeration.
+     * @private
+     */
+    setExaggeration_(factor) {
+      this.stage_.setExaggeration(factor);
+      this.box_.fit();
+      $('ve-note').textContent = factor === 1 ? 'True scale.' :
+        `Heights are drawn ${factor} times taller than widths. Depth labels stay true.`;
+    }
+
+    /**
+     * Shows the direction marker chosen in its menu.
+     * @private
+     */
+    setCompass_() {
+      const mode = $('compass').value;
+      this.compass_.setMode(mode);
+      $('arrow-key').hidden = mode !== 'arrows';
+    }
+
+    /**
+     * Applies every control that only shows, hides, moves or fades something, then redraws.
+     * @private
+     */
+    sync_() {
+      const stage = this.stage_;
+      const [nx, ny, nz] = stage.dims;
+      const sp = stage.spacing;
+      const checked = (id) => $(id).checked;
+      if (this.is2d_) {
+        this.slices_.set('i', 0, false, 1);
+        this.slices_.set('k', 0, false, 1);
+        this.slices_.set('j', 0, true, 1);
+      } else {
+        const bodyOn = checked('on-solid') && this.body_.ok;
+        this.solid_.actor.setVisibility(bodyOn);
+        this.solid_.actor.getProperty().setOpacity(this.opacity_('s-op'));
+        $('s-o').textContent = bodyOn ? this.body_.text : '';
+        this.surfaces_.setOpacity(this.opacity_('surf-op'));
+        ['i', 'j', 'k'].forEach((axis) => {
+          this.slices_.set(axis, +$(axis).value, checked(`on-${axis}`), this.opacity_(`op-${axis}`));
+        });
+        const km = (voxels, axis) => (voxels * sp[axis]).toFixed(sp[axis] < 1 ? 1 : 0);
+        $('k-o').textContent = `${km(nz - 1 - $('k').value, 2)} km deep`;
+        $('i-o').textContent = `${km(+$('i').value, 0)} km`;
+        $('j-o').textContent = `${km(+$('j').value, 1)} km`;
+        this.walls_.actor.setVisibility(checked('on-walls'));
+      }
+      if (this.sites_) this.sites_.setVisible(checked('on-sites'));
+      this.box_.axes.setVisibility(checked('on-axes'));
+      this.box_.outline.setVisibility(checked('on-outline'));
+      stage.render();
+    }
+
+    /**
+     * Takes the range, units and (unless kept) the default settings of the field on show.
+     * @param {boolean} keepLimits Leave the visitor's scale, solid and surface settings alone.
+     * @private
+     */
+    useField_(keepLimits) {
+      const scale = this.scale_;
+      const field = Object.assign({}, this.scene_.fields[this.field_], this.fieldOverride_ || {});
+      const unit = field.unit || '';
+      scale.setStorage(this.stage_.volume.meta);
+      $('scale-title').textContent = field.label + (unit ? ` (${unit})` : '');
+      document.querySelectorAll('.unit').forEach((e) => { e.textContent = unit; });
+      if (keepLimits) return;
+      const solid = field.solid || {};
+      $('vmin').value = formatNumber(field.vmin != null ? field.vmin : scale.physicalAt(0));
+      $('vmax').value = formatNumber(field.vmax != null ? field.vmax : scale.physicalAt(1));
+      $('cmap').value = field.cmap || 'mt';
+      $('rev').checked = !!field.reverse;
+      $('s-min-on').checked = solid.min != null;
+      $('s-max-on').checked = solid.max != null;
+      $('s-min').value = formatNumber(solid.min != null ? solid.min : scale.physicalAt(0.25));
+      $('s-max').value = formatNumber(solid.max != null ? solid.max : scale.physicalAt(0.75));
+      $('s-below').value = solid.below_km || 0;
+      $('surf').value = (field.surfaces || []).join(', ');
+    }
+
+    /**
+     * Loads and shows the field and time step currently chosen.
+     * @param {boolean} keepLimits As for useField_().
+     * @return {!Promise<void>}
+     * @private
+     */
+    async showVolume_(keepLimits) {
+      const request = ++this.request_;
+      $('busy').hidden = false;
+      try {
+        const volume = await this.store_.load(this.stem_());
+        if (request !== this.request_) return;      // a newer request has taken over
+        this.stage_.setVolume(volume);
+        this.useField_(keepLimits);
+        this.applyScale_();
+        this.updateWalls_();
+        this.updateBody_();
+        this.updateSurfaces_();
+        this.box_.fit();
+        this.sync_();
+      } catch (error) {
+        console.error(error);       // the picture stays on the last volume that loaded
+      } finally {
+        if (request === this.request_) $('busy').hidden = true;
+      }
+    }
+
+    /**
+     * @param {number} index Time step to show.
+     * @private
+     */
+    showTime_(index) {
+      this.time_ = index;
+      $('t').value = index;
+      $('t-o').textContent = this.scene_.times[index].label;
+      this.showVolume_(true);
+    }
+
+    /**
+     * Starts or stops stepping through time.
+     * @private
+     */
+    togglePlay_() {
+      if (this.timer_) {
+        clearInterval(this.timer_);
+        this.timer_ = null;
+        $('play').textContent = 'Play';
+        return;
+      }
+      $('play').textContent = 'Pause';
+      this.timer_ = setInterval(() => this.showTime_((this.time_ + 1) % this.scene_.times.length), PLAY_INTERVAL_MS);
+    }
+
+    /**
+     * Writes the size of the part on show.
+     * @private
+     */
+    noteExtent_() {
+      const km = this.stage_.cropDims.map((n, axis) => (n - 1) * this.stage_.spacing[axis]);
+      const sides = (this.is2d_ ? [km[0], km[2]] : km).map((v) => v.toFixed(v < 100 ? 1 : 0));
+      $('cut-o').textContent = `Showing ${sides.join(' × ')} km`;
+    }
+
+    /**
+     * Writes how many sites are on show.
+     * @private
+     */
+    updateSiteCount_() {
+      if (!this.sites_) return;
+      const shown = this.sites_.shownIds().length;
+      $('n-sites').textContent = `(${shown}${shown < this.sites_.total ? ` of ${this.sites_.total}` : ''})`;
+    }
+
+    /**
+     * Cuts the model in from its sides by the typed distances.
+     * @private
+     */
+    applyCut_() {
+      const stage = this.stage_;
+      const crop = stage.fullCrop();
+      let error = '';
+      CUTS.forEach(([id, axis, key, fromLow]) => {
+        if (this.is2d_ && axis === 1) return;
+        const km = $(id).value === '' ? 0 : +$(id).value;
+        if (!isFinite(km) || km < 0) {
+          error = 'Use zero or a positive distance.';
+          return;
+        }
+        const voxels = Math.round(km / stage.spacing[axis]);
+        crop[key] = fromLow > 0 ? voxels : stage.dims[axis] - 1 - voxels;
+      });
+      const tooThin = crop.i1 - crop.i0 < 1 || (!this.is2d_ && crop.j1 - crop.j0 < 1) || crop.k1 - crop.k0 < 1;
+      if (!error && tooThin) error = 'Those cuts leave nothing to show.';
+      $('cut-err').textContent = error;
+      if (error) return;
+
+      stage.setCrop(crop);
+      if (this.solid_) this.solid_.resize();
+      if (this.sites_) this.sites_.place();
+      this.updateSiteCount_();
+      this.updateWalls_();
+      this.updateBody_();
+      this.box_.fit();
+      this.noteExtent_();
+      this.sync_();
+      if (this.camera_.current) this.look_(this.camera_.current, true);
+      else stage.reframe();
+    }
+
+    /**
+     * Applies the saved view chosen in the menu: the opening view or one of the scene's own.
+     * @return {!Promise<void>}
+     * @private
+     */
+    async applyPreset_() {
+      const scene = this.scene_;
+      const stage = this.stage_;
+      const [nx, ny, nz] = stage.dims;
+      const sp = stage.spacing;
+      const preset = this.presets_[+$('preset').value] || this.presets_[0];
+      const d = preset.defaults || {};
+      const slices = d.slices || {};
+      const shows = d.show || {};
+      const cut = d.cut || {};
+      const or = (value, fallback) => (value != null ? value : fallback);
+      const clampIndex = (value, count) => Math.max(0, Math.min(count - 1, Math.round(+value) || 0));
+
+      this.fieldOverride_ = preset.field || null;
+      this.field_ = clampIndex(d.field, scene.fields.length);
+      $('field').value = this.field_;
+      if (scene.times) {
+        this.time_ = clampIndex(or(d.time, scene.times.length - 1), scene.times.length);
+        $('t').value = this.time_;
+        $('t-o').textContent = scene.times[this.time_].label;
+      }
+      $('ve').value = String(d.ve || 1);
+      $('on-outline').checked = shows.outline !== false;
+      $('on-axes').checked = shows.axes !== false;
+      $('on-sites').checked = shows.sites !== false;
+      $('on-sitefit').checked = !!shows.siteFit;
+      $('on-walls').checked = !!shows.walls;
+      $('compass').value = d.marker || 'cube';
+      [['cut-w', 'w'], ['cut-e', 'e'], ['cut-s', 's'], ['cut-n', 'n'], ['cut-t', 't'], ['cut-b', 'b']]
+          .forEach(([id, key]) => { $(id).value = cut[key] || 0; });
+      if (!this.is2d_) {
+        $('k').value = slices.depth_km != null ? nz - 1 - Math.round(slices.depth_km / sp[2]) : Math.round(nz * 0.85);
+        $('i').value = slices.x_km != null ? Math.round(slices.x_km / sp[0]) : Math.round(nx / 2);
+        $('j').value = slices.y_km != null ? Math.round(slices.y_km / sp[1]) : Math.round(ny / 2);
+        $('on-k').checked = slices.showDepth !== false;
+        $('on-i').checked = !!slices.showX;
+        $('on-j').checked = slices.showY !== false;
+        $('op-k').value = or(slices.opacityDepth, 100);
+        $('op-i').value = or(slices.opacityX, 100);
+        $('op-j').value = or(slices.opacityY, 100);
+        $('on-solid').checked = d.showSolid !== false;
+        $('s-op').value = or(d.solidOpacity, 100);
+        $('surf-op').value = or(d.surfaceOpacity, 50);
+      }
+      if (this.sites_) this.sites_.setTinted($('on-sitefit').checked);
+
+      await this.showVolume_(false);        // brings the field's own scale, solid and surfaces
+      this.setExaggeration_(+$('ve').value);
+      this.setCompass_();
+      this.applyCut_();
+      this.camera_.tilt = +d.tilt || 0;
+      this.camera_.setViewAngle(+d.viewAngle || 30);
+      let view = this.is2d_ ? 'south' : 'oblique';
+      if (!this.is2d_ && d.from) {
+        this.camera_.setCustom(d.from);
+        view = 'custom';
+      } else if (!this.is2d_ && this.camera_.has(d.view)) {
+        view = d.view;
+      }
+      this.look_(view, true);
+    }
+
+    /**
+     * Gathers the current settings in the form the scene file takes, for whoever sets a model up.
+     * @return {!Object} A "defaults" block and a "field" block.
+     * @private
+     */
+    settings_() {
+      const [, , nz] = this.stage_.dims;
+      const sp = this.stage_.spacing;
+      const checked = (id) => $(id).checked;
+      const num = (id) => +$(id).value;
+      const km = (voxels, axis) => +(voxels * sp[axis]).toFixed(2);
+      const defaults = {
+        field: this.field_,
+        view: this.camera_.current || 'oblique',
+        ve: this.stage_.exaggeration,
+        marker: $('compass').value,
+        show: {outline: checked('on-outline'), axes: checked('on-axes'), sites: checked('on-sites'),
+          siteFit: checked('on-sitefit'), walls: checked('on-walls')},
+        cut: {w: num('cut-w'), e: num('cut-e'), s: num('cut-s'), n: num('cut-n'), t: num('cut-t'), b: num('cut-b')},
+      };
+      const field = {
+        label: this.scene_.fields[this.field_].label,
+        vmin: num('vmin'), vmax: num('vmax'), cmap: $('cmap').value, reverse: checked('rev'),
+      };
+      if (this.scene_.times) defaults.time = this.time_;
+      if (!this.is2d_) {
+        defaults.slices = {
+          depth_km: km(nz - 1 - num('k'), 2), x_km: km(num('i'), 0), y_km: km(num('j'), 1),
+          showDepth: checked('on-k'), showX: checked('on-i'), showY: checked('on-j'),
+          opacityDepth: num('op-k'), opacityX: num('op-i'), opacityY: num('op-j'),
+        };
+        defaults.showSolid = checked('on-solid');
+        defaults.solidOpacity = num('s-op');
+        defaults.surfaceOpacity = num('surf-op');
+        field.solid = {};
+        if (checked('s-min-on')) field.solid.min = num('s-min');
+        if (checked('s-max-on')) field.solid.max = num('s-max');
+        if (num('s-below') > 0) field.solid.below_km = num('s-below');
+        field.surfaces = parseNumberList($('surf').value);
+      }
+      return {defaults, field};
+    }
+
+    /**
+     * Copies the current settings to the clipboard.
+     * @param {!HTMLElement} button The button pressed; shows "Copied" for a moment.
+     * @private
+     */
+    copySettings_(button) {
+      const done = () => {
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy settings'; }, 1500);
+      };
+      const text = JSON.stringify(this.settings_(), null, 1);
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(done, done);
+    }
+  }
+
+  /**
+   * Starts the page: reads the scene named in the address, fills in the record and opens the viewer.
+   * @return {!Promise<void>}
+   */
+  const start = async () => {
+    const message = $('msg');
+    try {
+      const name = (location.search.match(/[?&]scene=([\w-]+)/) || [])[1] || 'vulcan';
+      const [scenes, records] = await Promise.all([fetchJson('volumes/scenes.json'), fetchJson('volumes/records.json')]);
+      const scene = scenes[name];
+      if (!scene) throw new Error(`unknown scene "${name}"`);
+      if (!scene.fields || !scene.fields.length) throw new Error(`scene "${name}" lists no fields`);
+      if (!records[name]) throw new Error(`no record for scene "${name}"`);
+      renderRecord(scene, records[name], name);
+
+      const store = new VolumeStore();
+      const first = scene.fields[0];
+      const firstStem = scene.times ? first.stem.replace('{t}', scene.times[scene.times.length - 1].id) : first.stem;
+      const [volume, siteFile] = await Promise.all([
+        store.load(firstStem),
+        scene.sites ? fetchJson(`volumes/${scene.sites}`) : null,
+      ]);
+      const sites = siteFile ? siteFile.sites : null;
+      const viewer = new Viewer(scene, store, volume, sites);
+      await viewer.open();
+      message.remove();
+      if (scene.fit && viewer.siteLayer && window.MATEFit) {
+        window.MATEFit.init({url: `volumes/${scene.fit}`, sites, layer: viewer.siteLayer});
+      }
+    } catch (error) {
+      message.textContent = `The viewer could not start: ${error.message}`;
+      console.error(error);
+    }
+  };
+
+  start();
 })();
